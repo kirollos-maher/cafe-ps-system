@@ -2,8 +2,8 @@
 // ============================================================
 // CONFIG
 // ============================================================
-const SUPABASE_URL = 'https://fhjhtgbvtkuhhzitvxtx.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_X0aLD3gjXGqC_no4gW78ng_TWztP5cd';
+const SUPABASE_URL = 'https://hdrvqgicxxgfolozxgjp.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_dGNw7eTTempKBdFmAZRjYA_eaeEE2jj';
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // V2 safety helpers: never report success when Supabase rejected the operation.
@@ -2062,7 +2062,7 @@ async function openStationSheet(stationId) {
                 </button>
             </div>
             <button class="btn btn-ghost" onclick="closeSheet('stationOverlay')">${t('رجوع', 'Back')}</button>
-            <button class="btn btn-teal btn-block" onclick="showEndSessionPayment('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
+            <button class="btn btn-teal btn-block" onclick="handleEndSessionClick('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
         </div>
         <div class="error-text" id="stationSheetError"></div>
     `;
@@ -2247,6 +2247,121 @@ async function startSessionWithMode(stationId) {
 // ============================================================
 // END SESSION WITH PAYMENT - من الملف الشغال
 // ============================================================
+// ============================================================
+// ⏰ خطوة "هل العميل هيزود وقت؟" قبل صفحة الدفع (تظهر فقط لما
+// الجلسة تنازلية والوقت خلص فعلاً)
+// ============================================================
+function handleEndSessionClick(stationId) {
+    const session = sessions[stationId];
+    if (!session) return;
+    const activeSeg = getActiveSegmentFast(session.id);
+
+    if (activeSeg && activeSeg.timer_type === 'countdown' && getRemainingSeconds(activeSeg) <= 0) {
+        showExtendTimePrompt(stationId);
+    } else {
+        showEndSessionPayment(stationId);
+    }
+}
+
+function showExtendTimePrompt(stationId) {
+    activeStationId = stationId;
+    const body = document.getElementById('stationSheetBody');
+    if (!body) return;
+    body.innerHTML = `
+        <div style="text-align:center;padding:20px 0;">
+            <div style="font-size:40px;margin-bottom:8px;">⏰</div>
+            <div style="font-size:16px;font-weight:700;margin-bottom:6px;">${t('الوقت خلص!', 'Time is up!')}</div>
+            <div style="font-size:14px;color:var(--text-dim);">${t('هل العميل عايز يزود وقت؟', 'Does the customer want to add more time?')}</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn btn-ghost" style="flex:1;" onclick="declineTimeExtension('${stationId}')">${t('لأ، هننهي الجلسة', 'No, end session')}</button>
+            <button class="btn btn-amber" style="flex:1;" onclick="showExtendTimeInput('${stationId}')">${t('أيوه، هيزود وقت', 'Yes, add time')}</button>
+        </div>
+        <div class="error-text" id="stationSheetError"></div>
+    `;
+}
+
+function showExtendTimeInput(stationId) {
+    const body = document.getElementById('stationSheetBody');
+    if (!body) return;
+    body.innerHTML = `
+        <div class="section-title">${t('كام ساعة العميل هيزود؟', 'How many hours will the customer add?')}</div>
+        <div class="field">
+            <label>${t('المدة الإضافية بالساعات', 'Additional duration in hours')}</label>
+            <input type="number" id="extendHoursInput" class="mono" step="0.25" min="0.25" value="1" placeholder="${t('مثال: 1', 'e.g. 1')}">
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">
+            ${t('هيتضاف فوق الوقت الأصلي (مثلاً لو الأصل كان ساعتين وزودت ساعة، هيبقى الإجمالي 3 ساعات من بداية الجلسة).', 'This is added on top of the original duration (e.g. if the original was 2 hours and you add 1, the total becomes 3 hours from session start).')}
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;">
+            <button class="btn btn-ghost" style="flex:1;" onclick="showExtendTimePrompt('${stationId}')">${t('رجوع', 'Back')}</button>
+            <button class="btn btn-amber" style="flex:1;" onclick="confirmExtendTime('${stationId}')">${t('تأكيد', 'Confirm')}</button>
+        </div>
+        <div class="error-text" id="stationSheetError"></div>
+    `;
+    setTimeout(() => {
+        const inp = document.getElementById('extendHoursInput');
+        if (inp) inp.focus();
+    }, 100);
+}
+
+async function confirmExtendTime(stationId) {
+    const errEl = document.getElementById('stationSheetError');
+    if (errEl) errEl.textContent = '';
+    const input = document.getElementById('extendHoursInput');
+    const hours = parseFloat(input ? input.value : '');
+
+    if (!hours || isNaN(hours) || hours <= 0) {
+        if (errEl) errEl.textContent = t('اكتب عدد ساعات صحيح.', 'Enter a valid number of hours.');
+        return;
+    }
+
+    const session = sessions[stationId];
+    if (!session) return;
+
+    try {
+        const activeSeg = await getActiveSegment(session.id);
+        if (!activeSeg || activeSeg.timer_type !== 'countdown') {
+            showToast(t('الجلسة مش تنازلية دلوقتي.', 'Session is not a countdown anymore.'), 'error');
+            await refreshStationSheetContent(stationId);
+            return;
+        }
+
+        const addSeconds = Math.round(hours * 3600);
+        const newDuration = Math.max(0, Math.round(Number(activeSeg.duration_seconds) || 0)) + addSeconds;
+
+        const { error } = await supabaseClient.from('session_segments')
+            .update({ duration_seconds: newDuration })
+            .eq('id', activeSeg.id);
+        if (error) throw error;
+
+        // تحديث الكاش محلياً عشان الشاشة تتحدث فوراً من غير ما تستنى الـ realtime
+        activeSeg.duration_seconds = newDuration;
+        activeSegmentCache[session.id] = activeSeg;
+        sessionSegmentsCache[session.id] = null;
+
+        // إعادة ضبط حالة تنبيهات العد التنازلي عشان ما يفضلش يعتبر إن الوقت لسه خالص
+        if (typeof countdownAlertState !== 'undefined' && countdownAlertState[stationId]) {
+            delete countdownAlertState[stationId];
+        }
+
+        showToast(t(`تم إضافة ${hours} ساعة للجلسة`, `Added ${hours} hour(s) to the session`), 'success');
+
+        closeSheet('stationOverlay');
+        setTimeout(() => {
+            openStationSheet(stationId);
+        }, 200);
+    } catch (e) {
+        console.error('Error extending time:', e);
+        if (errEl) errEl.textContent = t('فشلت الإضافة، حاول تاني.', 'Failed to add time, try again.');
+        showToast(t('فشل: ' + e.message, 'Failed: ' + e.message), 'error');
+    }
+}
+
+function declineTimeExtension(stationId) {
+    showEndSessionPayment(stationId);
+}
+
 function showEndSessionPayment(stationId) {
     endSessionStationId = stationId;
     activeStationId = stationId;
@@ -3560,7 +3675,7 @@ async function refreshStationSheetContent(stationId) {
                 </button>
             </div>
             <button class="btn btn-ghost" onclick="closeSheet('stationOverlay')">${t('رجوع', 'Back')}</button>
-            <button class="btn btn-teal btn-block" onclick="showEndSessionPayment('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
+            <button class="btn btn-teal btn-block" onclick="handleEndSessionClick('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
         </div>
         <div class="error-text" id="stationSheetError"></div>
     `;
