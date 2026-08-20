@@ -2913,11 +2913,12 @@ async function getShiftTotals(shift) {
             sessions: sessRows || [],
             hoursRevenue,
             itemsRevenue,
-            itemBreakdown
+            itemBreakdown,
+            closedBy: shift.closed_by || '—'
         };
     } catch (e) {
         console.error('Error getting shift totals:', e);
-        return { revenue: 0, expenses: 0, profit: 0, expenseRows: [], sessions: [], hoursRevenue: 0, itemsRevenue: 0, itemBreakdown: {} };
+        return { revenue: 0, expenses: 0, profit: 0, expenseRows: [], sessions: [], hoursRevenue: 0, itemsRevenue: 0, itemBreakdown: {}, closedBy: '—' };
     }
 }
 
@@ -3009,19 +3010,28 @@ async function renderShiftView() {
         return;
     }
 
+    // ✅ تحسين الأداء: جلب تفاصيل كل الشيفتات بالتوازي
+    const shiftTotalsPromises = pastShifts.map(shift => getShiftTotals(shift));
+    const allShiftTotals = await Promise.all(shiftTotalsPromises);
+
     let historyHtml = '';
-    for (const shift of pastShifts) {
-        const shiftTotals = await getShiftTotals(shift);
+    for (let i = 0; i < pastShifts.length; i++) {
+        const shift = pastShifts[i];
+        const shiftTotals = allShiftTotals[i];
         const dateStr = new Date(shift.closed_at).toLocaleDateString(currentLang === 'ar' ? 'ar-EG' : 'en-US');
         const timeStr = new Date(shift.closed_at).toLocaleTimeString(currentLang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' });
         const revLabel = t('إيراد', 'Revenue');
         const expLabel = t('مصروفات', 'Expenses');
         const netLabel = t('صافي الدخل', 'Net Income');
+        const closedByName = shiftTotals.closedBy || '—';
         
         historyHtml += `
             <div class="list-row" style="flex-direction:column;align-items:stretch;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="viewShiftDetails('${shift.id}')">
                 <div style="display:flex;justify-content:space-between;width:100%;margin-bottom:6px;">
-                    <div class="row-title">${dateStr} - ${timeStr}</div>
+                    <div class="row-title">
+                        ${dateStr} - ${timeStr}
+                        ${closedByName !== '—' ? `<span style="display:inline-block;width:8px;height:8px;background:var(--amber);border-radius:50%;margin-left:6px;"></span> ${escapeHtml(closedByName)}` : ''}
+                    </div>
                     <div style="display:flex;gap:8px;align-items:center;">
                         <div style="display:flex;gap:12px;font-size:12px;color:var(--text-dim);">
                             <span>${revLabel} <span class="mono" style="color:var(--text);">${money(shiftTotals.revenue)}</span></span>
@@ -3098,7 +3108,7 @@ async function deleteShift(shiftId) {
     }
 }
 
-function buildShiftBreakdownHtml(totals, extraRowsHtml) {
+function buildShiftBreakdownHtml(totals, extraRowsHtml, closedBy) {
     const itemEntries = Object.entries(totals.itemBreakdown);
     const itemsHtml = itemEntries.length
         ? itemEntries.map(([name, amt]) =>
@@ -3112,12 +3122,18 @@ function buildShiftBreakdownHtml(totals, extraRowsHtml) {
           ).join('')
         : `<div class="empty" style="padding:10px 0;">${t('لا يوجد مصروفات في هذا الشيفت', 'No expenses this shift')}</div>`;
 
+    let closedByRow = '';
+    if (closedBy && closedBy !== '—') {
+        closedByRow = `<div class="list-row"><div class="row-title">${t('أغلق بواسطة', 'Closed By')}</div><div class="row-value mono">${escapeHtml(closedBy)}</div></div>`;
+    }
+
     return `
         <div class="list-row"><div class="row-title">${t('إيراد الساعات', 'Hours Revenue')}</div><div class="row-value mono">${money(totals.hoursRevenue)}</div></div>
         <div class="list-row"><div class="row-title">${t('إيراد المنيو', 'Menu Revenue')}</div><div class="row-value mono">${money(totals.itemsRevenue)}</div></div>
         <div class="list-row"><div class="row-title">${t('إجمالي الإيراد', 'Total Revenue')}</div><div class="row-value mono">${money(totals.revenue)}</div></div>
         <div class="list-row"><div class="row-title">${t('المصروفات', 'Expenses')}</div><div class="row-value mono">${money(totals.expenses)}</div></div>
         <div class="list-row"><div class="row-title">${t('الصافي', 'Net Income')}</div><div class="row-value mono">${money(totals.profit)}</div></div>
+        ${closedByRow}
         ${extraRowsHtml || ''}
         <div class="section-title" style="margin:14px 0 6px;">${t('إيراد المنيو حسب الصنف', 'Menu Revenue by Item')}</div>
         ${itemsHtml}
@@ -3132,7 +3148,7 @@ async function openCloseShiftSheet() {
     }
     const totals = await getShiftTotals(currentShift);
     const extraRow = `<div class="list-row"><div class="row-title">${t('أجهزة لسه شغالة', 'Active Devices')}</div><div class="row-value mono">${Object.keys(sessions).length}</div></div>`;
-    document.getElementById('closeShiftSummary').innerHTML = buildShiftBreakdownHtml(totals, extraRow);
+    document.getElementById('closeShiftSummary').innerHTML = buildShiftBreakdownHtml(totals, extraRow, totals.closedBy);
     openSheet('closeShiftOverlay');
 }
 
@@ -3149,7 +3165,7 @@ async function viewShiftDetails(shiftId) {
     const extraRows = `
         <div class="list-row"><div class="row-title">${t('وقت الفتح', 'Opened At')}</div><div class="row-value mono">${openedStr}</div></div>
         <div class="list-row"><div class="row-title">${t('وقت الإقفال', 'Closed At')}</div><div class="row-value mono">${closedStr}</div></div>`;
-    document.getElementById('shiftDetailsSummary').innerHTML = buildShiftBreakdownHtml(totals, extraRows);
+    document.getElementById('shiftDetailsSummary').innerHTML = buildShiftBreakdownHtml(totals, extraRows, totals.closedBy);
     openSheet('shiftDetailsOverlay');
 }
 
