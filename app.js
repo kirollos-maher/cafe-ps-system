@@ -2511,7 +2511,6 @@ async function startSessionWithMode(stationId) {
         // ✅ تسجيل الجلسة في الـ sessions قبل ما نضيف الدفعة المقدمة
         sessions[stationId] = session;
         renderStationsGrid();
-        closeSheet('stationOverlay');
         
         const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
         const durationDisplay = timerType === 'countdown' ? ` (${hours} ${t('ساعة', 'hour')})` : '';
@@ -2530,8 +2529,8 @@ async function startSessionWithMode(stationId) {
         }
         
         renderDashboard();
-        // ✅ نفتح شيت الجلسة بعد تسجيل الدفعة المقدمة عشان تظهر صح
-        setTimeout(() => openStationSheet(stationId), 400);
+        // ✅ نحدّث محتوى نفس الشيت المفتوح فورًا من غير ما نقفله ونفتحه تاني بعد تأخير مصطنع
+        await refreshStationSheetContent(stationId);
     } catch (e) {
         console.error('Error starting session:', e);
         errEl.textContent = t('فشل بدء الجلسة', 'Failed to start session');
@@ -3282,13 +3281,21 @@ async function submitExpense() {
 // ============================================================
 async function getShiftTotals(shift) {
     try {
-        const { data: sessRows } = await supabaseClient
-            .from('sessions')
-            .select('id, amount, payment_method')
-            .eq('business_id', business.id)
-            .eq('status', 'completed')
-            .gte('ended_at', shift.opened_at)
-            .lte('ended_at', shift.closed_at || new Date().toISOString());
+        // ✅ الاستعلامين دول مستقلين عن بعض (مبنيين على شيفت واحد بس)، فبنجيبهم مع بعض
+        // على التوازي بدل ما نستنى واحد بعد التاني — ده بيقلل عدد رحلات الشبكة المتتالية
+        const [{ data: sessRows }, { data: expRows }] = await Promise.all([
+            supabaseClient
+                .from('sessions')
+                .select('id, amount, payment_method')
+                .eq('business_id', business.id)
+                .eq('status', 'completed')
+                .gte('ended_at', shift.opened_at)
+                .lte('ended_at', shift.closed_at || new Date().toISOString()),
+            supabaseClient
+                .from('expenses')
+                .select('description, amount')
+                .eq('shift_id', shift.id)
+        ]);
         
         const revenue = (sessRows || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
@@ -3307,11 +3314,6 @@ async function getShiftTotals(shift) {
             });
         }
         const hoursRevenue = Math.max(0, revenue - itemsRevenue);
-        
-        const { data: expRows } = await supabaseClient
-            .from('expenses')
-            .select('description, amount')
-            .eq('shift_id', shift.id);
         
         const expenses = (expRows || []).reduce((s, r) => s + Number(r.amount || 0), 0);
         
@@ -3332,6 +3334,17 @@ async function getShiftTotals(shift) {
 }
 
 async function renderShiftView() {
+    // ✅ نتأكد إن التابات وصف الفلتر الشهري متزامنين مع shiftFilter الحالي
+    // من أول ما الشاشة تتفتح، مش بس لما المستخدم يدوس على تاب — عشان كده
+    // كانت شاشة الفلترة بتظهر غلط أول ما السايت يتفتح
+    document.querySelectorAll('.shift-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.filter === shiftFilter);
+    });
+    const monthlyFilterEl = document.getElementById('monthlyFilter');
+    if (monthlyFilterEl) {
+        monthlyFilterEl.style.display = shiftFilter === 'monthly' ? 'flex' : 'none';
+    }
+
     if (!currentShift) {
         document.getElementById('shiftSummary').innerHTML = `
             <div class="empty" style="padding:20px;">
