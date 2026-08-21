@@ -2220,6 +2220,7 @@ async function openStationSheet(stationId) {
         getPrepaidTotal(session.id).catch(e => { console.warn('Error getting prepaid total:', e); return 0; })
     ]);
     let activeSeg = segments.find(s => !s.ended_at);
+    activeSegmentCache[session.id] = activeSeg || null;
     activeSessionOrders = ordersResult.data || [];
 
     if (!activeSeg && session._pausedRemaining) {
@@ -4015,6 +4016,7 @@ async function refreshStationSheetContent(stationId) {
         getPrepaidTotal(session.id).catch(e => { console.warn('Error getting prepaid total:', e); return 0; })
     ]);
     const activeSeg = segments.find(s => !s.ended_at);
+    activeSegmentCache[session.id] = activeSeg || null;
     activeSessionOrders = ordersResult.data || [];
 
     // ✅ الحسابات دي بقت بتتم محليًا من غير أي طلب شبكة إضافي
