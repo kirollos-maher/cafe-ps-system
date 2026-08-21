@@ -994,6 +994,64 @@ async function getCurrentSegmentEstimate(sessionId) {
     return { amount, hours, segment: activeSeg };
 }
 
+// ============================================================
+// ⚡ نسخ سريعة (sync) بتحسب من بيانات اتجابت خلاص، من غير أي طلب شبكة إضافي
+// نفس الحسابات بالظبط بتاعة calculateTotalAmounts / getCurrentSegmentEstimate
+// بس من غير ما نضرب الداتابيز تاني على نفس المعلومة. مستخدمة في فتح/تحديث
+// شاشة الجهاز عشان تبقى سريعة الاستجابة حتى لو النت بطيء.
+// ============================================================
+function computeTotalsFromData(segments, orders, prepaidTotal) {
+    let singleTotal = 0, multiTotal = 0, singleDuration = 0, multiDuration = 0;
+
+    for (const seg of segments) {
+        if (seg.ended_at) {
+            const hours = (new Date(seg.ended_at) - new Date(seg.started_at)) / 3600000;
+            const amount = (seg.amount !== null && seg.amount !== undefined)
+                ? Number(seg.amount)
+                : Math.round((hours * Number(seg.rate)) * 100) / 100;
+            if (seg.mode === 'single') {
+                singleTotal += amount;
+                singleDuration += hours;
+            } else {
+                multiTotal += amount;
+                multiDuration += hours;
+            }
+        }
+    }
+
+    const ordersTotal = (orders || []).reduce((sum, o) => sum + (Number(o.quantity) * Number(o.unit_price)), 0);
+    const grandTotal = Math.round((singleTotal + multiTotal + ordersTotal) * 100) / 100;
+
+    return {
+        singleTotal: Math.round(singleTotal * 100) / 100,
+        multiTotal: Math.round(multiTotal * 100) / 100,
+        singleDuration: singleDuration,
+        multiDuration: multiDuration,
+        ordersTotal: ordersTotal,
+        prepaidTotal: prepaidTotal || 0,
+        dueAfterPrepayment: Math.max(0, Math.round((grandTotal - (prepaidTotal || 0)) * 100) / 100),
+        grandTotal: grandTotal
+    };
+}
+
+function computeSegmentEstimate(activeSeg) {
+    if (!activeSeg) return { amount: 0, hours: 0, segment: null };
+
+    const start = new Date(activeSeg.started_at);
+    const now = new Date(nowCorrected());
+    let hours = Math.max(0, (now - start) / 3600000);
+    let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
+
+    if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
+        const elapsedSeconds = (now - start) / 1000;
+        const remainingSeconds = Math.max(0, activeSeg.duration_seconds - elapsedSeconds);
+        hours = remainingSeconds / 3600;
+        amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
+    }
+
+    return { amount, hours, segment: activeSeg };
+}
+
 function getCurrentSegmentEstimateFast(sessionId) {
     const activeSeg = getActiveSegmentFast(sessionId);
     if (!activeSeg) return { amount: 0, hours: 0, segment: null };
@@ -2145,12 +2203,24 @@ async function openStationSheet(stationId) {
 
     currentOrderSessionId = session.id;
 
+    // ✅ نفتح الشيت فورًا مع مؤشر تحميل خفيف — الاستجابة بقت لحظية بغض النظر عن سرعة النت،
+    // والبيانات الفعلية بتتحمل وتتحط بعدين لما توصل
+    body.innerHTML = `<div style="text-align:center;padding:60px 0;color:var(--text-dim);"><i class="fa-solid fa-spinner fa-spin" style="font-size:24px;"></i></div>`;
+    openSheet('stationOverlay');
+
     // ✅ تحديث الكاش عشان نجيب أحدث بيانات
     sessionSegmentsCache[session.id] = null;
     activeSegmentCache[session.id] = null;
 
-    const segments = await getSessionSegments(session.id);
+    // ✅ الطلبات المستقلة عن بعض بتتجاب مرة واحدة على التوازي بدل التوالي
+    // (كانت بتاخد 4-5 رحلات شبكة متتالية، دلوقتي رحلتين بس على أقصى تقدير)
+    const [segments, ordersResult, prepaidTotal] = await Promise.all([
+        getSessionSegments(session.id),
+        supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at'),
+        getPrepaidTotal(session.id).catch(e => { console.warn('Error getting prepaid total:', e); return 0; })
+    ]);
     let activeSeg = segments.find(s => !s.ended_at);
+    activeSessionOrders = ordersResult.data || [];
 
     if (!activeSeg && session._pausedRemaining) {
         const st2 = stations.find(s => s.id === stationId);
@@ -2160,13 +2230,13 @@ async function openStationSheet(stationId) {
         const durationSeconds = session._pausedRemaining;
         delete session._pausedRemaining;
         
-        await createSegment(session.id, mode, new Date().toISOString(), rate, timerType, durationSeconds);
-        activeSeg = await getActiveSegment(session.id);
-        activeSegmentCache[session.id] = activeSeg;
+        // ✅ createSegment بيرجع الصف الجديد على طول، فمحتاجين مش نعمل استعلام تاني نجيبه بيه
+        activeSeg = await createSegment(session.id, mode, new Date().toISOString(), rate, timerType, durationSeconds);
     }
 
-    const totals = await calculateTotalAmounts(session.id);
-    const currentEstimate = await getCurrentSegmentEstimate(session.id);
+    // ✅ الحسابات دي بقت بتتم محليًا من البيانات اللي جبناها فوق، من غير أي طلب شبكة إضافي
+    const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
+    const currentEstimate = computeSegmentEstimate(activeSeg);
     
     const currentMode = activeSeg ? activeSeg.mode : (session.current_mode || 'single');
     const currentRate = activeSeg ? activeSeg.rate : (st.single_rate || 20);
@@ -2180,9 +2250,6 @@ async function openStationSheet(stationId) {
     const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
     const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
     const isCountdown = timerType === 'countdown';
-
-    const { data: orders } = await supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at');
-    activeSessionOrders = orders || [];
 
     const activeSegStart = activeSeg ? activeSeg.started_at : session.started_at;
     const liveEarnedNow = activeSeg ? Math.round((Math.max(0, (nowCorrected() - new Date(activeSeg.started_at)) / 3600000) * Number(activeSeg.rate)) * 100) / 100 : 0;
@@ -2273,7 +2340,6 @@ async function openStationSheet(stationId) {
     
     renderMenuQuickAdd();
     renderStationOrdersSection();
-    openSheet('stationOverlay');
 }
 
 function normalizeMenuCategory(category) {
@@ -3942,10 +4008,18 @@ async function refreshStationSheetContent(stationId) {
     const body = document.getElementById('stationSheetBody');
     if (!body) return;
     
-    const segments = await getSessionSegments(session.id);
+    // ✅ الطلبات المستقلة عن بعض بتتجاب مرة واحدة على التوازي بدل التوالي
+    const [segments, ordersResult, prepaidTotal] = await Promise.all([
+        getSessionSegments(session.id),
+        supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at'),
+        getPrepaidTotal(session.id).catch(e => { console.warn('Error getting prepaid total:', e); return 0; })
+    ]);
     const activeSeg = segments.find(s => !s.ended_at);
-    const totals = await calculateTotalAmounts(session.id);
-    const currentEstimate = await getCurrentSegmentEstimate(session.id);
+    activeSessionOrders = ordersResult.data || [];
+
+    // ✅ الحسابات دي بقت بتتم محليًا من غير أي طلب شبكة إضافي
+    const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
+    const currentEstimate = computeSegmentEstimate(activeSeg);
     
     const currentMode = activeSeg ? activeSeg.mode : (session.current_mode || 'single');
     const currentRate = activeSeg ? activeSeg.rate : (st.single_rate || 20);
@@ -3959,9 +4033,6 @@ async function refreshStationSheetContent(stationId) {
     const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
     const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
     const isCountdown = timerType === 'countdown';
-
-    const { data: orders } = await supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at');
-    activeSessionOrders = orders || [];
 
     const activeSegStart = activeSeg ? activeSeg.started_at : session.started_at;
     const liveEarnedNow = activeSeg ? Math.round((Math.max(0, (nowCorrected() - new Date(activeSeg.started_at)) / 3600000) * Number(activeSeg.rate)) * 100) / 100 : 0;
