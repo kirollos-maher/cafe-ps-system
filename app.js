@@ -709,7 +709,11 @@ async function getActiveSegment(sessionId) {
 }
 
 function getActiveSegmentFast(sessionId) {
-    return activeSegmentCache[sessionId] || null;
+    // ✅ لو الكاش فاضي أو null، نجيب من الداتابيز
+    if (!activeSegmentCache[sessionId]) {
+        return null;
+    }
+    return activeSegmentCache[sessionId];
 }
 
 // ============================================================
@@ -2401,7 +2405,7 @@ async function startSessionWithMode(stationId) {
 }
 
 // ============================================================
-// END SESSION WITH PAYMENT - من الملف الشغال
+// END SESSION WITH PAYMENT - مع خيار تمديد الوقت للجلسات التنازلية
 // ============================================================
 function showEndSessionPayment(stationId) {
     endSessionStationId = stationId;
@@ -2411,6 +2415,207 @@ function showEndSessionPayment(stationId) {
     if (!session) { endingSessionInProgress = false; return; }
 
     (async () => {
+        const activeSeg = await getActiveSegment(session.id);
+        
+        // ✅ لو الجلسة تنازلية والوقت خلص أو باقي أقل من 5 ثواني، نعرض خيار التمديد
+        if (activeSeg && activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
+            const remaining = getRemainingSeconds(activeSeg);
+            // لو الوقت خلص (0) أو أقل من 5 ثواني، نعرض خيار التمديد
+            if (remaining <= 5) {
+                showExtendOrEndOptions(stationId, session, activeSeg);
+                return;
+            }
+        }
+        
+        // ✅ باقي الكود القديم (لو الجلسة تصاعدية أو فيها وقت باقي)
+        await proceedToEndSession(stationId, session);
+    })();
+}
+
+// ============================================================
+// ✅ عرض خيارات التمديد أو إنهاء الجلسة (للجلسات التنازلية المنتهية)
+// ============================================================
+function showExtendOrEndOptions(stationId, session, activeSeg) {
+    const st = stations.find(s => s.id === stationId);
+    const stationName = st ? (st.name || t('جهاز', 'Device') + ' ' + st.number) : t('جهاز', 'Device');
+    
+    const body = document.getElementById('stationSheetBody');
+    if (!body) return;
+    
+    // حساب إجمالي الجلسة حتى الآن
+    const start = new Date(activeSeg.started_at);
+    const now = new Date(nowCorrected());
+    const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
+    const hoursUsed = elapsedSeconds / 3600;
+    const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
+    
+    body.innerHTML = `
+        <div style="text-align:center;margin:20px 0;">
+            <div style="font-size:48px;margin-bottom:8px;">⏰</div>
+            <div style="font-size:22px;font-weight:800;color:var(--amber);">${t('انتهى الوقت!', 'Time\'s up!')}</div>
+            <div style="font-size:14px;color:var(--text-dim);margin-top:4px;">
+                ${t('جهاز', 'Device')} <strong>${escapeHtml(stationName)}</strong>
+            </div>
+            <div style="font-size:13px;color:var(--text-dim);margin-top:4px;">
+                ${t('المدة المستخدمة', 'Time used')}: ${formatElapsed(start)} 
+                (${moneyDec(hoursUsed)} ${t('ساعة', 'hr')})
+            </div>
+            <div style="font-size:16px;font-weight:700;color:var(--amber);margin-top:6px;">
+                ${t('المبلغ المستحق حتى الآن', 'Amount due so far')}: ${moneyDec(currentAmount)} ${t('ج', 'EGP')}
+            </div>
+        </div>
+        
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
+            <button class="btn btn-amber btn-block" onclick="showExtendTimeSheet('${stationId}')" style="font-size:16px;padding:16px;">
+                <i class="fa-solid fa-clock"></i> ${t('🔄 تمديد الوقت', 'Extend Time')}
+            </button>
+            <button class="btn btn-teal btn-block" onclick="proceedToEndSession('${stationId}', null)" style="font-size:16px;padding:16px;">
+                <i class="fa-solid fa-stop"></i> ${t('💰 إنهاء الجلسة والدفع', 'End Session & Pay')}
+            </button>
+        </div>
+        <div class="error-text" id="extendError"></div>
+    `;
+}
+
+// ============================================================
+// ✅ عرض شاشة إضافة وقت إضافي للجلسة التنازلية
+// ============================================================
+function showExtendTimeSheet(stationId) {
+    const session = sessions[stationId];
+    if (!session) return;
+    
+    const activeSeg = getActiveSegmentFast(session.id);
+    if (!activeSeg) {
+        showToast(t('لا يوجد جزء نشط للجلسة', 'No active segment found'), 'error');
+        return;
+    }
+    
+    const st = stations.find(s => s.id === stationId);
+    const stationName = st ? (st.name || t('جهاز', 'Device') + ' ' + st.number) : t('جهاز', 'Device');
+    
+    // حساب الوقت المستخدم حتى الآن
+    const start = new Date(activeSeg.started_at);
+    const now = new Date(nowCorrected());
+    const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
+    const hoursUsed = elapsedSeconds / 3600;
+    const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
+    
+    const body = document.getElementById('stationSheetBody');
+    if (!body) return;
+    
+    body.innerHTML = `
+        <div style="text-align:center;margin:12px 0;">
+            <div style="font-size:28px;margin-bottom:4px;">⏱️</div>
+            <div style="font-size:18px;font-weight:700;">${t('تمديد الوقت', 'Extend Time')}</div>
+            <div style="font-size:13px;color:var(--text-dim);">
+                ${escapeHtml(stationName)} — ${t('المستخدم', 'Used')}: ${formatElapsed(start)} (${moneyDec(hoursUsed)} ${t('ساعة', 'hr')})
+            </div>
+            <div style="font-size:13px;color:var(--text-dim);">
+                ${t('المبلغ المستحق حتى الآن', 'Amount due so far')}: ${moneyDec(currentAmount)} ${t('ج', 'EGP')}
+            </div>
+        </div>
+        
+        <div class="field">
+            <label data-ar="أضف وقت إضافي (بالساعات)" data-en="Add extra time (in hours)">${t('أضف وقت إضافي (بالساعات)', 'Add extra time (in hours)')}</label>
+            <input type="number" id="extendHoursInput" class="mono" step="0.25" min="0.25" value="1" placeholder="مثال: 1.5">
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);margin:-8px 0 12px;text-align:center;">
+            ${t('0.25 = 15 دقيقة، 0.5 = 30 دقيقة، 1 = ساعة، 2 = ساعتين', '0.25 = 15 min, 0.5 = 30 min, 1 = 1 hour, 2 = 2 hours')}
+        </div>
+        
+        <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn btn-ghost" style="flex:1;" onclick="showExtendOrEndOptions('${stationId}', null, null)">
+                <i class="fa-solid fa-arrow-right"></i> ${t('رجوع', 'Back')}
+            </button>
+            <button class="btn btn-amber" style="flex:2;" onclick="confirmExtendTime('${stationId}')">
+                <i class="fa-solid fa-check"></i> ${t('تأكيد التمديد', 'Confirm Extend')}
+            </button>
+        </div>
+        <div class="error-text" id="extendTimeError"></div>
+    `;
+}
+
+// ============================================================
+// ✅ تأكيد تمديد الوقت للجلسة التنازلية
+// ============================================================
+async function confirmExtendTime(stationId) {
+    const session = sessions[stationId];
+    if (!session) {
+        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
+        return;
+    }
+    
+    const activeSeg = getActiveSegmentFast(session.id);
+    if (!activeSeg) {
+        showToast(t('لا يوجد جزء نشط للجلسة', 'No active segment found'), 'error');
+        return;
+    }
+    
+    const input = document.getElementById('extendHoursInput');
+    const errEl = document.getElementById('extendTimeError');
+    if (errEl) errEl.textContent = '';
+    
+    const extraHours = parseFloat(input ? input.value : '');
+    if (!extraHours || extraHours <= 0) {
+        if (errEl) errEl.textContent = t('أدخل مدة صحيحة أكبر من صفر', 'Enter a valid duration greater than zero');
+        return;
+    }
+    
+    const extraSeconds = Math.round(extraHours * 3600);
+    if (extraSeconds < 60) {
+        if (errEl) errEl.textContent = t('المدة يجب أن تكون دقيقة على الأقل', 'Duration must be at least 1 minute');
+        return;
+    }
+    
+    try {
+        // ✅ 1. نحسب الوقت المستخدم حتى الآن في الجزء الحالي
+        const start = new Date(activeSeg.started_at);
+        const now = new Date(nowCorrected());
+        const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
+        const hoursUsed = elapsedSeconds / 3600;
+        const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
+        
+        // ✅ 2. نقفل الجزء الحالي بالمبلغ المستحق
+        await closeSegment(activeSeg.id, now.toISOString(), currentAmount);
+        
+        // ✅ 3. نفتح جزء جديد بنفس الوضع والمعدل مع المدة الجديدة (الوقت المتبقي القديم + الوقت الإضافي)
+        const remainingOld = Math.max(0, (activeSeg.duration_seconds || 0) - elapsedSeconds);
+        const newDuration = remainingOld + extraSeconds;
+        
+        const mode = activeSeg.mode || 'single';
+        const rate = activeSeg.rate || (mode === 'single' ? 20 : 30);
+        const timerType = 'countdown';
+        
+        await createSegment(session.id, mode, now.toISOString(), rate, timerType, newDuration);
+        
+        // ✅ 4. تحديث الكاش
+        activeSegmentCache[session.id] = null;
+        sessionSegmentsCache[session.id] = null;
+        
+        // ✅ 5. نعمل ريفريش للشاشة
+        showToast(t(`✅ تم تمديد الوقت ${extraHours} ساعة`, `✅ Time extended by ${extraHours} hours`), 'success');
+        
+        // ✅ 6. نحدث واجهة الجلسة
+        await refreshStationSheetContent(stationId);
+        
+    } catch (e) {
+        console.error('Error extending time:', e);
+        if (errEl) errEl.textContent = t('فشل تمديد الوقت: ' + e.message, 'Failed to extend time: ' + e.message);
+        showToast(t('فشل تمديد الوقت', 'Failed to extend time'), 'error');
+    }
+}
+
+// ============================================================
+// ✅ متابعة إنهاء الجلسة (الجزء القديم من showEndSessionPayment)
+// ============================================================
+async function proceedToEndSession(stationId, sessionParam) {
+    const session = sessionParam || sessions[stationId];
+    if (!session) { 
+        endingSessionInProgress = false;
+        return; 
+    }
+    
+    try {
         const activeSeg = await getActiveSegment(session.id);
         if (activeSeg && !activeSeg.ended_at) {
             const now = new Date(nowCorrected()).toISOString();
@@ -2543,12 +2748,16 @@ function showEndSessionPayment(stationId) {
         });
         
         selectedPaymentMethod = null;
-    })();
+        
+    } catch (e) {
+        console.error('Error in proceedToEndSession:', e);
+        endingSessionInProgress = false;
+        showToast(t('حصل خطأ، حاول تاني.', 'Error, try again.'), 'error');
+    }
 }
 
-
 // ============================================================
-// SELECT PAYMENT METHOD - من الملف الشغال
+// SELECT PAYMENT METHOD
 // ============================================================
 function selectPaymentMethod(pmId) {
     selectedPaymentMethod = pmId;
@@ -2624,7 +2833,7 @@ function updatePaymentCalculation() {
 }
 
 // ============================================================
-// CANCEL END SESSION (Back button) - من الملف الشغال
+// CANCEL END SESSION (Back button)
 // ============================================================
 function cancelEndSession() {
     const stationId = endSessionStationId || activeStationId;
@@ -2641,7 +2850,7 @@ function cancelEndSession() {
 }
 
 // ============================================================
-// CONFIRM END SESSION WITH PAYMENT - من الملف الشغال
+// CONFIRM END SESSION WITH PAYMENT
 // ============================================================
 async function confirmEndSessionWithPayment() {
     if (!selectedPaymentMethod) {
@@ -3040,7 +3249,8 @@ async function renderShiftView() {
             .lt('closed_at', endDate.toISOString());
     }
     
-    const { data: pastShifts } = await query.limit(50);
+    // ✅ Limit to last 30 shifts for performance
+    const { data: pastShifts } = await query.limit(30);
     
     const histEl = document.getElementById('shiftHistory');
     
@@ -3064,19 +3274,31 @@ async function renderShiftView() {
         return;
     }
 
+    // ✅ Load all shift totals in parallel for better performance
+    const shiftPromises = pastShifts.map(shift => getShiftTotals(shift));
+    const shiftTotalsResults = await Promise.all(shiftPromises);
+    
     let historyHtml = '';
-    for (const shift of pastShifts) {
-        const shiftTotals = await getShiftTotals(shift);
+    for (let i = 0; i < pastShifts.length; i++) {
+        const shift = pastShifts[i];
+        const shiftTotals = shiftTotalsResults[i];
         const dateStr = new Date(shift.closed_at).toLocaleDateString(currentLang === 'ar' ? 'ar-EG' : 'en-US');
         const timeStr = new Date(shift.closed_at).toLocaleTimeString(currentLang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' });
         const revLabel = t('إيراد', 'Revenue');
         const expLabel = t('مصروفات', 'Expenses');
         const netLabel = t('صافي الدخل', 'Net Income');
         
+        // ✅ Show who closed the shift with a small orange badge
+        const closedBy = shift.closed_by || t('غير معروف', 'Unknown');
+        const closedByBadge = `<span class="badge badge-amber" style="font-size:9px;padding:1px 8px;">👤 ${escapeHtml(closedBy)}</span>`;
+        
         historyHtml += `
             <div class="list-row" style="flex-direction:column;align-items:stretch;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="viewShiftDetails('${shift.id}')">
                 <div style="display:flex;justify-content:space-between;width:100%;margin-bottom:6px;">
-                    <div class="row-title">${dateStr} - ${timeStr}</div>
+                    <div class="row-title" style="display:flex;align-items:center;gap:8px;font-size:13px;">
+                        ${dateStr} - ${timeStr}
+                        ${closedByBadge}
+                    </div>
                     <div style="display:flex;gap:8px;align-items:center;">
                         <div style="display:flex;gap:12px;font-size:12px;color:var(--text-dim);">
                             <span>${revLabel} <span class="mono" style="color:var(--text);">${money(shiftTotals.revenue)}</span></span>
@@ -3213,6 +3435,9 @@ async function confirmCloseShift() {
     const totals = await getShiftTotals(currentShift);
     const closedAt = new Date().toISOString();
     
+    // ✅ Get the name of who's closing the shift
+    const closedByName = currentUser ? (currentUser.name || currentUser.type || t('غير معروف', 'Unknown')) : t('غير معروف', 'Unknown');
+    
     const { data, error } = await supabaseClient
         .from('shifts')
         .update({ 
@@ -3221,7 +3446,7 @@ async function confirmCloseShift() {
             total_revenue: totals.revenue, 
             total_expenses: totals.expenses, 
             total_profit: totals.profit, 
-            closed_by: currentUser.name || currentUser.type 
+            closed_by: closedByName
         })
         .eq('id', currentShift.id)
         .select();
@@ -3630,6 +3855,10 @@ async function refreshStationSheetContent(stationId) {
     const st = stations.find(s => s.id === stationId);
     const session = sessions[stationId];
     if (!session || !st) return;
+    
+    // ✅ تحديث الكاش عشان نجيب أحدث بيانات
+    sessionSegmentsCache[session.id] = null;
+    activeSegmentCache[session.id] = null;
     
     const body = document.getElementById('stationSheetBody');
     if (!body) return;
