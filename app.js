@@ -750,7 +750,7 @@ async function addPrepayment(sessionId, amount, note) {
 }
 
 async function getSessionPrepayments(sessionId) {
-    // ✅ لو في كاش واستثنينا الجلسة الحالية، نجيب من الكاش
+    // ✅ لو في كاش، نجيب من الكاش
     if (sessionPrepaymentsCache[sessionId] !== undefined && sessionPrepaymentsCache[sessionId] !== null) {
         return sessionPrepaymentsCache[sessionId];
     }
@@ -2402,26 +2402,33 @@ async function startSessionWithMode(stationId) {
         
         await createSegment(session.id, mode, now, rate, timerType, durationSeconds);
         
-        // ✅ لو العميل دفع مقدماً قبل ما يقعد، نسجل الدفعة دي على الجلسة الجديدة
-        const prepayInput = document.getElementById('prepaymentInput');
-        const prepayAmount = prepayInput ? (parseFloat(prepayInput.value) || 0) : 0;
-        if (prepayAmount > 0) {
-            try {
-                await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
-            } catch (e) {
-                console.warn('Error saving prepayment on start:', e);
-                showToast(t('اتبدأت الجلسة لكن فشل تسجيل الدفعة المقدمة', 'Session started but saving the prepayment failed'), 'error');
-            }
-        }
-        
+        // ✅ تسجيل الجلسة في الـ sessions قبل ما نضيف الدفعة المقدمة
         sessions[stationId] = session;
         renderStationsGrid();
         closeSheet('stationOverlay');
+        
         const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
         const durationDisplay = timerType === 'countdown' ? ` (${hours} ${t('ساعة', 'hour')})` : '';
-        showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay})`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay})`), 'success');
+        
+        // ✅ لو العميل دفع مقدماً قبل ما يقعد، نسجل الدفعة دي على الجلسة الجديدة
+        const prepayInput = document.getElementById('prepaymentInput');
+        const prepayAmount = prepayInput ? (parseFloat(prepayInput.value) || 0) : 0;
+        
+        if (prepayAmount > 0) {
+            try {
+                await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
+                showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) + دفعة مقدمة ${moneyDec(prepayAmount)} ج`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) + Prepayment ${moneyDec(prepayAmount)} EGP`), 'success');
+            } catch (e) {
+                console.warn('Error saving prepayment on start:', e);
+                showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) لكن فشل تسجيل الدفعة المقدمة`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) but failed to save prepayment`), 'error');
+            }
+        } else {
+            showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay})`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay})`), 'success');
+        }
+        
         renderDashboard();
-        setTimeout(() => openStationSheet(stationId), 300);
+        // ✅ نفتح شيت الجلسة بعد تسجيل الدفعة المقدمة عشان تظهر صح
+        setTimeout(() => openStationSheet(stationId), 400);
     } catch (e) {
         console.error('Error starting session:', e);
         errEl.textContent = t('فشل بدء الجلسة', 'Failed to start session');
