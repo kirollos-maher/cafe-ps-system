@@ -1884,13 +1884,26 @@ async function confirmTransfer() {
     
     try {
         const currentMode = sourceSession.current_mode || 'single';
-        const currentRate = Number(sourceSession.rate) || (currentMode === 'multi' ? Number(targetStation.multi_rate) : Number(targetStation.single_rate));
+        // ✅ ناخد سعر الجهاز المستهدف الحالي دايماً (مش سعر الجلسة القديم)
+        const currentRate = currentMode === 'multi' ? Number(targetStation.multi_rate) : Number(targetStation.single_rate);
         const { error: updateError } = await supabaseClient.from('sessions')
             .update({ station_id: targetStationId, rate: currentRate })
             .eq('id', sourceSession.id)
             .eq('business_id', business.id)
             .eq('status', 'active');
         if (updateError) throw updateError;
+
+        // ✅ لازم نحدث سعر الجزء (segment) النشط كمان، لأن حساب المبلغ فعلياً بيعتمد عليه مش على sessions.rate
+        const activeSeg = getActiveSegmentFast(sourceSession.id);
+        if (activeSeg && Number(activeSeg.rate) !== currentRate) {
+            const { error: segError } = await supabaseClient.from('session_segments')
+                .update({ rate: currentRate })
+                .eq('id', activeSeg.id);
+            if (segError) throw segError;
+            activeSeg.rate = currentRate;
+            activeSegmentCache[sourceSession.id] = activeSeg;
+        }
+        sessionSegmentsCache[sourceSession.id] = null;
 
         delete sessions[sourceStationId];
         sessions[targetStationId] = { ...sourceSession, station_id: targetStationId, rate: currentRate };
@@ -2378,6 +2391,13 @@ async function startSessionWithMode(stationId) {
     const st = stations.find(s => s.id === stationId);
     const rate = mode === 'single' ? (st.single_rate || 20) : (st.multi_rate || 30);
     
+    // ✅ نقرأ قيمة الدفعة المقدمة فوراً *قبل* أي عملية async
+    // لأن أول ما الجلسة تتسجل في الداتابيز، الـ realtime subscription بيرجع يعمل
+    // openStationSheet() تلقائياً ويمسح الفورم (فيه حقل الدفعة المقدمة) قبل ما
+    // نوصل نقراه، فكانت الدفعة بتتفقد بصمت من غير أي رسالة خطأ
+    const prepayInputEl = document.getElementById('prepaymentInput');
+    const prepayAmount = prepayInputEl ? (parseFloat(prepayInputEl.value) || 0) : 0;
+    
     const errEl = document.getElementById('startSessionError');
     errEl.textContent = '';
     
@@ -2411,9 +2431,6 @@ async function startSessionWithMode(stationId) {
         const durationDisplay = timerType === 'countdown' ? ` (${hours} ${t('ساعة', 'hour')})` : '';
         
         // ✅ لو العميل دفع مقدماً قبل ما يقعد، نسجل الدفعة دي على الجلسة الجديدة
-        const prepayInput = document.getElementById('prepaymentInput');
-        const prepayAmount = prepayInput ? (parseFloat(prepayInput.value) || 0) : 0;
-        
         if (prepayAmount > 0) {
             try {
                 await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
@@ -2467,6 +2484,18 @@ function showEndSessionPayment(stationId) {
 // ✅ عرض خيارات التمديد أو إنهاء الجلسة (للجلسات التنازلية المنتهية)
 // ============================================================
 function showExtendOrEndOptions(stationId, session, activeSeg) {
+    // ✅ لو الدالة استُدعيت من زرار "رجوع" (بدون session/activeSeg)، نجيبهم من الكاش المحلي
+    if (!session) session = sessions[stationId];
+    if (!session) {
+        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
+        return;
+    }
+    if (!activeSeg) activeSeg = getActiveSegmentFast(session.id);
+    if (!activeSeg) {
+        showToast(t('لا يوجد جزء نشط للجلسة', 'No active segment found'), 'error');
+        return;
+    }
+
     const st = stations.find(s => s.id === stationId);
     const stationName = st ? (st.name || t('جهاز', 'Device') + ' ' + st.number) : t('جهاز', 'Device');
     
