@@ -1886,6 +1886,35 @@ async function confirmTransfer() {
         const currentMode = sourceSession.current_mode || 'single';
         // ✅ ناخد سعر الجهاز المستهدف الحالي دايماً (مش سعر الجلسة القديم)
         const currentRate = currentMode === 'multi' ? Number(targetStation.multi_rate) : Number(targetStation.single_rate);
+
+        // ✅ بدل ما نغيّر سعر الجزء الحالي بأثر رجعي (وده كان بيغير حساب الوقت اللي فات كله)،
+        // نقفل الجزء الحالي بسعره القديم لحد لحظة النقل، ونفتح جزء جديد بالسعر الجديد
+        // بنفس فكرة تبديل Single/Multi بالظبط. المؤقت الكلي (إجمالي الجلسة) بيفضل مكمّل
+        // عادي لأنه مبني على started_at بتاع الجلسة نفسها، مش بتاع الجزء.
+        const now = new Date().toISOString();
+        let activeSeg = await getActiveSegment(sourceSession.id);
+
+        if (activeSeg && Number(activeSeg.rate) !== currentRate) {
+            const start = new Date(activeSeg.started_at);
+            let usedSeconds = (new Date(now) - start) / 1000;
+            let hours = usedSeconds / 3600;
+            let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
+
+            const timerType = activeSeg.timer_type || 'countup';
+            let durationSeconds = Math.round(activeSeg.duration_seconds || 0);
+
+            if (timerType === 'countdown' && activeSeg.duration_seconds) {
+                // ✅ الوقت المتبقي يفضل زي ما هو، بيكمل العد من نفس النقطة بالسعر الجديد
+                usedSeconds = Math.min(usedSeconds, activeSeg.duration_seconds);
+                hours = usedSeconds / 3600;
+                amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
+                durationSeconds = Math.max(0, Math.round((activeSeg.duration_seconds || 0) - usedSeconds));
+            }
+
+            await closeSegment(activeSeg.id, now, amount);
+            activeSeg = await createSegment(sourceSession.id, currentMode, now, currentRate, timerType, durationSeconds);
+        }
+
         const { error: updateError } = await supabaseClient.from('sessions')
             .update({ station_id: targetStationId, rate: currentRate })
             .eq('id', sourceSession.id)
@@ -1893,16 +1922,6 @@ async function confirmTransfer() {
             .eq('status', 'active');
         if (updateError) throw updateError;
 
-        // ✅ لازم نحدث سعر الجزء (segment) النشط كمان، لأن حساب المبلغ فعلياً بيعتمد عليه مش على sessions.rate
-        const activeSeg = getActiveSegmentFast(sourceSession.id);
-        if (activeSeg && Number(activeSeg.rate) !== currentRate) {
-            const { error: segError } = await supabaseClient.from('session_segments')
-                .update({ rate: currentRate })
-                .eq('id', activeSeg.id);
-            if (segError) throw segError;
-            activeSeg.rate = currentRate;
-            activeSegmentCache[sourceSession.id] = activeSeg;
-        }
         sessionSegmentsCache[sourceSession.id] = null;
 
         delete sessions[sourceStationId];
