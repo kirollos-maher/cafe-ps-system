@@ -736,12 +736,24 @@ async function addPrepayment(sessionId, amount, note) {
     }).select().single();
     if (error) throw error;
 
-    sessionPrepaymentsCache[sessionId] = null; // إبطال الكاش عشان يتجاب تاني
+    // ✅ إبطال الكاش عشان يتجاب تاني
+    sessionPrepaymentsCache[sessionId] = null;
+    
+    // ✅ تحديث واجهة الجلسة الحالية عشان تظهر الدفعة الجديدة
+    if (activeStationId && sessions[activeStationId] && sessions[activeStationId].id === sessionId) {
+        setTimeout(() => {
+            refreshStationSheetContent(activeStationId);
+        }, 300);
+    }
+    
     return data;
 }
 
 async function getSessionPrepayments(sessionId) {
-    if (sessionPrepaymentsCache[sessionId]) return sessionPrepaymentsCache[sessionId];
+    // ✅ لو في كاش واستثنينا الجلسة الحالية، نجيب من الكاش
+    if (sessionPrepaymentsCache[sessionId] !== undefined && sessionPrepaymentsCache[sessionId] !== null) {
+        return sessionPrepaymentsCache[sessionId];
+    }
     try {
         const { data, error } = await supabaseClient
             .from('session_prepayments')
@@ -758,6 +770,7 @@ async function getSessionPrepayments(sessionId) {
         return sessionPrepaymentsCache[sessionId];
     } catch (e) {
         console.warn('Error loading prepayments:', e);
+        sessionPrepaymentsCache[sessionId] = [];
         return [];
     }
 }
@@ -937,7 +950,16 @@ async function calculateTotalAmounts(sessionId) {
         .select('quantity, unit_price')
         .eq('session_id', sessionId);
     const ordersTotal = (orders || []).reduce((sum, o) => sum + (Number(o.quantity) * Number(o.unit_price)), 0);
-    const prepaidTotal = await getPrepaidTotal(sessionId);
+    
+    // ✅ جلب الدفعات المقدمة من الكاش أو الداتابيز
+    let prepaidTotal = 0;
+    try {
+        prepaidTotal = await getPrepaidTotal(sessionId);
+    } catch (e) {
+        console.warn('Error getting prepaid total:', e);
+        prepaidTotal = 0;
+    }
+    
     const grandTotal = Math.round((singleTotal + multiTotal + ordersTotal) * 100) / 100;
     
     return {
@@ -2091,6 +2113,10 @@ async function openStationSheet(stationId) {
 
     currentOrderSessionId = session.id;
 
+    // ✅ تحديث الكاش عشان نجيب أحدث بيانات
+    sessionSegmentsCache[session.id] = null;
+    activeSegmentCache[session.id] = null;
+
     const segments = await getSessionSegments(session.id);
     let activeSeg = segments.find(s => !s.ended_at);
 
@@ -2158,12 +2184,10 @@ async function openStationSheet(stationId) {
                 <div class="mono" style="font-size:18px;font-weight:700;color:var(--amber);" id="overallTotalAmount" data-base-total="${totals.grandTotal}">${moneyDec(liveGrandTotal)}</div>
             </div>
         </div>
-        ${totals.prepaidTotal > 0 ? `
-        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed var(--teal-dim);">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed ${totals.prepaidTotal > 0 ? 'var(--teal-dim)' : 'var(--border)'};">
             <span style="font-size:12px;color:var(--text-dim);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span>
-            <span class="mono" style="font-size:15px;font-weight:700;color:var(--teal);">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
+            <span class="mono" style="font-size:15px;font-weight:700;color:${totals.prepaidTotal > 0 ? 'var(--teal)' : 'var(--text-faint)'};">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
         </div>
-        ` : ''}
         
         ${segments.filter(s => s.ended_at).length > 0 ? `
         <div class="segment-breakdown">
@@ -3916,12 +3940,10 @@ async function refreshStationSheetContent(stationId) {
                 <div class="mono" style="font-size:18px;font-weight:700;color:var(--amber);" id="overallTotalAmount" data-base-total="${totals.grandTotal}">${moneyDec(liveGrandTotal)}</div>
             </div>
         </div>
-        ${totals.prepaidTotal > 0 ? `
-        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed var(--teal-dim);">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed ${totals.prepaidTotal > 0 ? 'var(--teal-dim)' : 'var(--border)'};">
             <span style="font-size:12px;color:var(--text-dim);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span>
-            <span class="mono" style="font-size:15px;font-weight:700;color:var(--teal);">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
+            <span class="mono" style="font-size:15px;font-weight:700;color:${totals.prepaidTotal > 0 ? 'var(--teal)' : 'var(--text-faint)'};">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
         </div>
-        ` : ''}
         
         ${segments.filter(s => s.ended_at).length > 0 ? `
         <div class="segment-breakdown">
