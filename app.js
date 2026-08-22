@@ -123,6 +123,7 @@ let currentOrderSessionId = null;
 let selectedPaymentMethod = null;
 let endSessionStationId = null;
 let endingSessionInProgress = false;
+let stationOrdersCache = {}; // session_id -> [{item_name, quantity}, ...] لملخص الطلبات في كارت الجهاز
 // ✅ حالة الخصم/المبلغ المدفوع لشاشة إنهاء الجلسة
 let currentEndSessionTotals = null;
 let endSessionDiscount = 0;
@@ -189,6 +190,7 @@ function navigateTo(viewId) {
     if (viewId === 'view-dashboard') renderDashboard();
     if (viewId === 'view-shift') renderShiftView();
     if (viewId === 'view-settings') { renderSettings(); renderSettingsStations(); renderSettingsPaymentMethods(); }
+    if (viewId === 'view-stations') refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
 }
 function openSheet(id) { document.getElementById(id).classList.add('show'); }
 function closeSheet(id) {
@@ -198,6 +200,7 @@ function closeSheet(id) {
         activeStationId = null;
         sessionSegmentsCache = {};
         endingSessionInProgress = false;
+        refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
     }
     if (id === 'transferOverlay') {
         transferSourceStationId = null;
@@ -1145,6 +1148,7 @@ function handleSessionChange(payload) {
 function handleOrderChange(payload) {
     const row = payload.new && Object.keys(payload.new).length ? payload.new : payload.old;
     if (activeStationId && row && row.session_id === (sessions[activeStationId] || {}).id) renderStationOrdersSection();
+    refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
 }
 
 function handleStationChange() {
@@ -1363,6 +1367,7 @@ function renderStationsGrid() {
         let modeBadge = '';
         let timerBadge = '';
         let timerDisplay = '';
+        let ordersSummaryDisplay = '';
         
         if (occupied) {
             const mode = s.current_mode || 'single';
@@ -1376,6 +1381,9 @@ function renderStationsGrid() {
             timerBadge = `<span class="badge ${timerBadgeClass}" style="font-size:8px;padding:1px 6px;">${timerLabel}</span>`;
             
             timerDisplay = `<div class="station-timer mono" data-start="${s.started_at}" data-station-id="${st.id}" data-timer-type="${timerType}">${formatElapsed(new Date(s.started_at))}</div>`;
+
+            const summaryText = getStationOrdersSummaryText(s.id);
+            ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}" title="${escapeHtml(summaryText)}">${escapeHtml(summaryText)}</div>`;
         } else {
             timerDisplay = `<div class="station-rate">${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}</div>`;
         }
@@ -1383,8 +1391,54 @@ function renderStationsGrid() {
         return `<div class="station-card ${occupied ? 'occupied' : ''}" onclick="openStationSheet('${st.id}')">
             <div><div class="station-num">${displayName}</div><div class="station-status">${statusText} ${modeBadge} ${timerBadge}</div></div>
             ${timerDisplay}
+            ${ordersSummaryDisplay}
         </div>`;
     }).join('');
+
+    refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
+}
+
+// ============================================================
+// STATION CARD — ORDERS SUMMARY (ملخص الطلبات جوه كارت الجهاز)
+// ============================================================
+async function refreshStationOrdersCache() {
+    const sessionIds = Object.values(sessions).map(s => s && s.id).filter(Boolean);
+    if (sessionIds.length === 0) {
+        stationOrdersCache = {};
+        return;
+    }
+    try {
+        const { data, error } = await supabaseClient
+            .from('session_orders')
+            .select('session_id, item_name, quantity')
+            .in('session_id', sessionIds);
+        if (error) throw error;
+        const grouped = {};
+        (data || []).forEach(o => {
+            if (!grouped[o.session_id]) grouped[o.session_id] = [];
+            grouped[o.session_id].push(o);
+        });
+        stationOrdersCache = grouped;
+    } catch (e) {
+        console.warn('Error loading station orders summary:', e);
+    }
+}
+
+function getStationOrdersSummaryText(sessionId) {
+    const orders = stationOrdersCache[sessionId];
+    if (!orders || orders.length === 0) return '';
+    return orders.map(o => `${o.item_name} ×${o.quantity}`).join(' ، ');
+}
+
+function updateStationOrdersSummaryDOM() {
+    stations.forEach(st => {
+        const s = sessions[st.id];
+        const el = document.getElementById(`stationOrdersSummary-${st.id}`);
+        if (!el) return;
+        const summaryText = s ? getStationOrdersSummaryText(s.id) : '';
+        el.textContent = summaryText;
+        el.title = summaryText;
+    });
 }
 
 // ============================================================
@@ -1777,6 +1831,10 @@ async function addOrderItem(sessionId, menuItemId) {
             activeSessionOrders = refreshedOrders || [];
         }
 
+        // ✅ حدّث ملخص الطلبات في كارت الجهاز فورًا من غير ما ننتظر الـ realtime
+        stationOrdersCache[sessionId] = activeSessionOrders;
+        updateStationOrdersSummaryDOM();
+
         renderStationOrdersSection();
 
         const totals = await calculateTotalAmounts(sessionId);
@@ -1840,6 +1898,8 @@ async function removeOrderItem(orderId) {
         await supabaseClient.from('session_orders').delete().eq('id', orderId);
         activeSessionOrders = activeSessionOrders.filter(o => o.id !== orderId);
     }
+    stationOrdersCache[order.session_id] = activeSessionOrders;
+    updateStationOrdersSummaryDOM();
     renderStationOrdersSection();
 }
 
