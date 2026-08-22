@@ -1382,8 +1382,8 @@ function renderStationsGrid() {
             
             timerDisplay = `<div class="station-timer mono" data-start="${s.started_at}" data-station-id="${st.id}" data-timer-type="${timerType}">${formatElapsed(new Date(s.started_at))}</div>`;
 
-            const summaryText = getStationOrdersSummaryText(s.id);
-            ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}" title="${escapeHtml(summaryText)}">${escapeHtml(summaryText)}</div>`;
+            const summaryLines = getStationOrdersSummaryLines(s.id);
+            ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}">${buildOrdersSummaryHtml(summaryLines)}</div>`;
         } else {
             timerDisplay = `<div class="station-rate">${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}</div>`;
         }
@@ -1424,10 +1424,14 @@ async function refreshStationOrdersCache() {
     }
 }
 
-function getStationOrdersSummaryText(sessionId) {
+function getStationOrdersSummaryLines(sessionId) {
     const orders = stationOrdersCache[sessionId];
-    if (!orders || orders.length === 0) return '';
-    return orders.map(o => `${o.item_name} ×${o.quantity}`).join(' ، ');
+    if (!orders || orders.length === 0) return [];
+    return orders.map(o => `${o.item_name} ×${o.quantity}`);
+}
+
+function buildOrdersSummaryHtml(lines) {
+    return lines.map(l => `<div class="station-orders-summary-item">${escapeHtml(l)}</div>`).join('');
 }
 
 function updateStationOrdersSummaryDOM() {
@@ -1435,9 +1439,8 @@ function updateStationOrdersSummaryDOM() {
         const s = sessions[st.id];
         const el = document.getElementById(`stationOrdersSummary-${st.id}`);
         if (!el) return;
-        const summaryText = s ? getStationOrdersSummaryText(s.id) : '';
-        el.textContent = summaryText;
-        el.title = summaryText;
+        const lines = s ? getStationOrdersSummaryLines(s.id) : [];
+        el.innerHTML = buildOrdersSummaryHtml(lines);
     });
 }
 
