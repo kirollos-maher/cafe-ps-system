@@ -157,11 +157,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .station-mode-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700; display: inline-block; }
 .station-orders-summary {
     margin-top: auto; width: 100%; text-align: center; font-size: 11px; color: var(--text-dim);
-    display: flex; flex-direction: column; gap: 3px; overflow-y: auto; max-height: 90px;
+    display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 90px;
 }
 .station-orders-summary-item {
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: baseline; justify-content: center; gap: 5px;
+    overflow-wrap: anywhere; line-height: 1.4;
 }
+.station-orders-summary-name { overflow-wrap: anywhere; }
+.station-orders-summary-qty { color: var(--text-faint); flex-shrink: 0; }
 
 /* ---------- lists ---------- */
 .list-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 4px; border-bottom: 1px solid var(--border); }
