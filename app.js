@@ -2245,6 +2245,7 @@ async function openStationSheet(stationId) {
             </button>
             <div class="error-text" id="startSessionError"></div>
         `;
+        openSheet('stationOverlay');
         return;
     }
 
