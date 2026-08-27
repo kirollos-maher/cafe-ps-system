@@ -1427,11 +1427,16 @@ async function refreshStationOrdersCache() {
 function getStationOrdersSummaryLines(sessionId) {
     const orders = stationOrdersCache[sessionId];
     if (!orders || orders.length === 0) return [];
-    return orders.map(o => `${o.item_name} ×${o.quantity}`);
+    return orders.map(o => ({ name: o.item_name, qty: o.quantity }));
 }
 
 function buildOrdersSummaryHtml(lines) {
-    return lines.map(l => `<div class="station-orders-summary-item">${escapeHtml(l)}</div>`).join('');
+    // ✅ اسم الصنف والكمية بيتكتبوا في عنصرين منفصلين (مش نص واحد مخلوط)
+    // عشان منتظمش في مشكلة اتجاه النص (bidi) اللي بتحصل لما نخلط عربي بأرقام/× في سطر واحد
+    return lines.map(l => `<div class="station-orders-summary-item">
+        <span class="station-orders-summary-name">${escapeHtml(l.name)}</span>
+        <span class="station-orders-summary-qty" dir="ltr">×${escapeHtml(String(l.qty))}</span>
+    </div>`).join('');
 }
 
 function updateStationOrdersSummaryDOM() {
