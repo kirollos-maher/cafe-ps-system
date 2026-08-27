@@ -1369,23 +1369,33 @@ function renderStationsGrid() {
         let timerDisplay = '';
         let ordersSummaryDisplay = '';
         
-        if (occupied) {
-            const mode = s.current_mode || 'single';
-            const modeLabel = mode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
-            const badgeClass = mode === 'single' ? 'badge-mode-single' : 'badge-mode-multi';
-            modeBadge = `<span class="badge ${badgeClass}" style="font-size:9px;padding:1px 8px;">${modeLabel}</span>`;
-            
-            const timerType = s.timer_type || 'countup';
-            const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
-            const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
-            timerBadge = `<span class="badge ${timerBadgeClass}" style="font-size:8px;padding:1px 6px;">${timerLabel}</span>`;
-            
-            timerDisplay = `<div class="station-timer mono" data-start="${s.started_at}" data-station-id="${st.id}" data-timer-type="${timerType}">${formatElapsed(new Date(s.started_at))}</div>`;
+        const isDrinksStation = st.station_type === 'drinks';
 
-            const summaryLines = getStationOrdersSummaryLines(s.id);
-            ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}">${buildOrdersSummaryHtml(summaryLines)}</div>`;
+        if (occupied) {
+            if (isDrinksStation) {
+                modeBadge = `<span class="badge badge-teal" style="font-size:9px;padding:1px 8px;">${t('طلبات فقط', 'Orders Only')}</span>`;
+                const summaryLines = getStationOrdersSummaryLines(s.id);
+                ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}">${buildOrdersSummaryHtml(summaryLines)}</div>`;
+            } else {
+                const mode = s.current_mode || 'single';
+                const modeLabel = mode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
+                const badgeClass = mode === 'single' ? 'badge-mode-single' : 'badge-mode-multi';
+                modeBadge = `<span class="badge ${badgeClass}" style="font-size:9px;padding:1px 8px;">${modeLabel}</span>`;
+
+                const timerType = s.timer_type || 'countup';
+                const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
+                const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
+                timerBadge = `<span class="badge ${timerBadgeClass}" style="font-size:8px;padding:1px 6px;">${timerLabel}</span>`;
+
+                timerDisplay = `<div class="station-timer mono" data-start="${s.started_at}" data-station-id="${st.id}" data-timer-type="${timerType}">${formatElapsed(new Date(s.started_at))}</div>`;
+
+                const summaryLines = getStationOrdersSummaryLines(s.id);
+                ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}">${buildOrdersSummaryHtml(summaryLines)}</div>`;
+            }
         } else {
-            timerDisplay = `<div class="station-rate">${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}</div>`;
+            timerDisplay = isDrinksStation
+                ? `<div class="station-rate">${t('ترابيزة مشروبات — طلبات فقط', 'Drinks table — orders only')}</div>`
+                : `<div class="station-rate">${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}</div>`;
         }
         
         return `<div class="station-card ${occupied ? 'occupied' : ''}" onclick="openStationSheet('${st.id}')">
@@ -1540,14 +1550,29 @@ function renderSettingsStations() {
     }
     el.innerHTML = stations.map(st => {
         const displayName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
+        const subLabel = st.station_type === 'drinks'
+            ? t('طلبات فقط (بدون وقت)', 'Orders only (no timer)')
+            : `${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}`;
         return `<div class="list-row">
-            <div><div class="row-title">${escapeHtml(displayName)}</div><div class="row-sub">${t('رقم', 'No.')} ${st.number} — ${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}</div></div>
+            <div><div class="row-title">${escapeHtml(displayName)}</div><div class="row-sub">${t('رقم', 'No.')} ${st.number} — ${subLabel}</div></div>
             <div class="row-actions">
                 <button class="btn btn-ghost btn-sm" onclick="editStation('${st.id}')"><i class="fa-solid fa-pen"></i></button>
                 <button class="btn btn-danger-sm" onclick="deleteStationById('${st.id}')"><i class="fa-solid fa-trash"></i></button>
             </div>
         </div>`;
     }).join('');
+}
+
+function selectStationType(type) {
+    document.querySelectorAll('#stationTypeSelector .mode-option').forEach(el => {
+        el.classList.remove('selected-single', 'selected-multi');
+        if (el.dataset.stationType === type) {
+            el.classList.add(type === 'billiard' ? 'selected-single' : 'selected-multi');
+        }
+    });
+    document.getElementById('stationManageType').value = type;
+    const rateFields = document.getElementById('stationRateFields');
+    if (rateFields) rateFields.style.display = type === 'drinks' ? 'none' : 'block';
 }
 
 function openStationManagementSheet() {
@@ -1559,6 +1584,7 @@ function openStationManagementSheet() {
     document.getElementById('stationDeleteBtn').style.display = 'none';
     document.getElementById('stationManageError').textContent = '';
     document.getElementById('stationManagementTitle').textContent = t('إضافة جهاز', 'Add Device');
+    selectStationType('billiard');
     openSheet('stationManagementOverlay');
 }
 
@@ -1573,6 +1599,7 @@ function editStation(stationId) {
     document.getElementById('stationDeleteBtn').style.display = 'flex';
     document.getElementById('stationManageError').textContent = '';
     document.getElementById('stationManagementTitle').textContent = t('تعديل جهاز', 'Edit Device');
+    selectStationType(st.station_type === 'drinks' ? 'drinks' : 'billiard');
     openSheet('stationManagementOverlay');
 }
 
@@ -1580,14 +1607,18 @@ async function submitStationManagement() {
     const id = document.getElementById('stationManageId').value;
     const number = parseInt(document.getElementById('stationManageNumber').value);
     const name = document.getElementById('stationManageName').value.trim();
-    const singleRate = parseFloat(document.getElementById('stationManageSingleRate').value);
-    const multiRate = parseFloat(document.getElementById('stationManageMultiRate').value);
+    const stationType = document.getElementById('stationManageType').value === 'drinks' ? 'drinks' : 'billiard';
+    const isDrinks = stationType === 'drinks';
+    const singleRate = isDrinks ? 0 : parseFloat(document.getElementById('stationManageSingleRate').value);
+    const multiRate = isDrinks ? 0 : parseFloat(document.getElementById('stationManageMultiRate').value);
     const errEl = document.getElementById('stationManageError');
     errEl.textContent = '';
 
     if (!number || number < 1) { errEl.textContent = t('رقم الجهاز مطلوب.', 'Device number is required.'); return; }
-    if (isNaN(singleRate) || singleRate < 0) { errEl.textContent = t('سعر Single مطلوب.', 'Single rate is required.'); return; }
-    if (isNaN(multiRate) || multiRate < 0) { errEl.textContent = t('سعر Multi مطلوب.', 'Multi rate is required.'); return; }
+    if (!isDrinks) {
+        if (isNaN(singleRate) || singleRate < 0) { errEl.textContent = t('سعر Single مطلوب.', 'Single rate is required.'); return; }
+        if (isNaN(multiRate) || multiRate < 0) { errEl.textContent = t('سعر Multi مطلوب.', 'Multi rate is required.'); return; }
+    }
 
     if (!id && stations.some(s => s.number === number)) {
         errEl.textContent = t('رقم الجهاز مستخدم بالفعل.', 'Device number already exists.');
@@ -1596,11 +1627,11 @@ async function submitStationManagement() {
 
     try {
         if (id) {
-            const { error } = await supabaseClient.from('stations').update({ number, name, single_rate: singleRate, multi_rate: multiRate }).eq('id', id).eq('business_id', business.id);
+            const { error } = await supabaseClient.from('stations').update({ number, name, single_rate: singleRate, multi_rate: multiRate, station_type: stationType }).eq('id', id).eq('business_id', business.id);
             if (error) throw error;
             showToast(t('تم تحديث الجهاز', 'Device updated'), 'success');
         } else {
-            const { error } = await supabaseClient.from('stations').insert({ business_id: business.id, number, name, single_rate: singleRate, multi_rate: multiRate });
+            const { error } = await supabaseClient.from('stations').insert({ business_id: business.id, number, name, single_rate: singleRate, multi_rate: multiRate, station_type: stationType });
             if (error) throw error;
             showToast(t('تم إضافة الجهاز', 'Device added'), 'success');
         }
@@ -2197,6 +2228,26 @@ async function openStationSheet(stationId) {
 
     body.innerHTML = '';
 
+    if (!session && st.station_type === 'drinks') {
+        currentOrderSessionId = null;
+        body.innerHTML = `
+            <div style="text-align:center;margin-bottom:12px;">
+                <span style="font-size:36px;">🍹</span>
+                <div style="font-size:14px;color:var(--text-dim);margin-top:4px;">${t('ترابيزة مشروبات — بدون احتساب وقت', 'Drinks table — no time is billed')}</div>
+            </div>
+            <div class="section-title">${t('دفعة مقدمة (اختياري)', 'Prepayment (optional)')}</div>
+            <div class="field">
+                <label data-ar="لو العميل دفع فلوس قبل ما يقعد" data-en="If the customer paid before sitting">${t('المبلغ المدفوع مقدماً (جنيه)', 'Amount Prepaid (EGP)')}</label>
+                <input type="number" id="prepaymentInput" class="mono" min="0" step="0.5" value="0" placeholder="0">
+            </div>
+            <button class="btn btn-amber btn-block" onclick="startDrinksSession('${stationId}')">
+                <i class="fa-solid fa-play"></i> ${t('فتح الترابيزة', 'Open Table')}
+            </button>
+            <div class="error-text" id="startSessionError"></div>
+        `;
+        return;
+    }
+
     if (!session) {
         currentOrderSessionId = null;
         const singleRate = st.single_rate || 20;
@@ -2324,6 +2375,13 @@ async function openStationSheet(stationId) {
     const liveEarnedNow = activeSeg ? Math.round((Math.max(0, (nowCorrected() - new Date(activeSeg.started_at)) / 3600000) * Number(activeSeg.rate)) * 100) / 100 : 0;
     const liveGrandTotal = Math.round((totals.grandTotal + liveEarnedNow) * 100) / 100;
 
+    if (st.station_type === 'drinks') {
+        body.innerHTML = drinksTableSheetHtml(stationId, totals);
+        renderMenuQuickAdd();
+        renderStationOrdersSection();
+        return;
+    }
+
     body.innerHTML = `
         <div style="text-align:center;margin-bottom:12px;">
             <div style="display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -2409,6 +2467,43 @@ async function openStationSheet(stationId) {
     
     renderMenuQuickAdd();
     renderStationOrdersSection();
+}
+
+// ============================================================
+// شيت مبسط لترابيزات المشروبات (بدون وقت — طلبات فقط)
+// ============================================================
+function drinksTableSheetHtml(stationId, totals) {
+    return `
+        <div style="text-align:center;margin-bottom:12px;">
+            <span class="badge badge-teal" style="font-size:13px;padding:4px 14px;">🍹 ${t('طلبات فقط', 'Orders Only')}</span>
+        </div>
+        <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:10px;text-align:center;margin-bottom:12px;">
+            <div style="font-size:10px;color:var(--text-dim);">${t('إجمالي الطلبات', 'Orders Total')}</div>
+            <div class="mono" style="font-size:22px;font-weight:700;color:var(--amber);" id="overallTotalAmount" data-base-total="${totals.grandTotal}">${moneyDec(totals.grandTotal)}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed ${totals.prepaidTotal > 0 ? 'var(--teal-dim)' : 'var(--border)'};">
+            <span style="font-size:12px;color:var(--text-dim);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span>
+            <span class="mono" style="font-size:15px;font-weight:700;color:${totals.prepaidTotal > 0 ? 'var(--teal)' : 'var(--text-faint)'};">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
+        </div>
+
+        <div class="section-title">${t('إضافة طلب', 'Add Order')}</div>
+        <div id="menuQuickAdd" style="margin-bottom:12px;"></div>
+
+        <div class="section-title">${t('الطلبات', 'Orders')}</div>
+        <div class="panel" id="stationOrdersList"></div>
+
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
+            <button class="btn btn-prepay btn-block" onclick="openPrepaymentSheet('${stationId}')">
+                <i class="fa-solid fa-money-bill-wave"></i> ${t('إضافة دفعة مقدمة', 'Add Prepayment')}
+            </button>
+            <button class="btn btn-cancel btn-block" onclick="confirmCancelSession('${stationId}')">
+                <i class="fa-solid fa-xmark"></i> ${t('إلغاء الجلسة', 'Cancel Session')}
+            </button>
+            <button class="btn btn-ghost" onclick="closeSheet('stationOverlay')">${t('رجوع', 'Back')}</button>
+            <button class="btn btn-teal btn-block" onclick="showEndSessionPayment('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
+        </div>
+        <div class="error-text" id="stationSheetError"></div>
+    `;
 }
 
 function normalizeMenuCategory(category) {
@@ -2602,6 +2697,54 @@ async function startSessionWithMode(stationId) {
     } catch (e) {
         console.error('Error starting session:', e);
         errEl.textContent = t('فشل بدء الجلسة', 'Failed to start session');
+    }
+}
+
+// ============================================================
+// بدء جلسة لترابيزة مشروبات (بدون وقت — طلبات فقط)
+// ============================================================
+async function startDrinksSession(stationId) {
+    const prepayInputEl = document.getElementById('prepaymentInput');
+    const prepayAmount = prepayInputEl ? (parseFloat(prepayInputEl.value) || 0) : 0;
+    const errEl = document.getElementById('startSessionError');
+    if (errEl) errEl.textContent = '';
+
+    const now = new Date(nowCorrected()).toISOString();
+
+    try {
+        const { data: session, error } = await supabaseClient.from('sessions').insert({
+            business_id: business.id,
+            station_id: stationId,
+            rate: 0,
+            started_at: now,
+            started_by_device: getDeviceId(),
+            current_mode: 'single',
+            timer_type: 'countup'
+        }).select().single();
+        if (error) { throw error; }
+
+        await createSegment(session.id, 'single', now, 0, 'countup', 0);
+
+        sessions[stationId] = session;
+        renderStationsGrid();
+
+        if (prepayAmount > 0) {
+            try {
+                await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
+                showToast(t(`اتفتحت الترابيزة + دفعة مقدمة ${moneyDec(prepayAmount)} ج`, `Table opened + Prepayment ${moneyDec(prepayAmount)} EGP`), 'success');
+            } catch (e) {
+                console.warn('Error saving prepayment on start:', e);
+                showToast(t('اتفتحت الترابيزة لكن فشل تسجيل الدفعة المقدمة', 'Table opened but failed to save prepayment'), 'error');
+            }
+        } else {
+            showToast(t('اتفتحت الترابيزة', 'Table opened'), 'success');
+        }
+
+        renderDashboard();
+        await refreshStationSheetContent(stationId);
+    } catch (e) {
+        console.error('Error starting drinks session:', e);
+        if (errEl) errEl.textContent = t('فشل فتح الترابيزة', 'Failed to open table');
     }
 }
 
@@ -4102,6 +4245,14 @@ async function refreshStationSheetContent(stationId) {
 
     // ✅ الحسابات دي بقت بتتم محليًا من غير أي طلب شبكة إضافي
     const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
+
+    if (st.station_type === 'drinks') {
+        body.innerHTML = drinksTableSheetHtml(stationId, totals);
+        renderMenuQuickAdd();
+        renderStationOrdersSection();
+        return;
+    }
+
     const currentEstimate = computeSegmentEstimate(activeSeg);
     
     const currentMode = activeSeg ? activeSeg.mode : (session.current_mode || 'single');
