@@ -1641,7 +1641,7 @@ async function submitStationManagement() {
         renderSettingsStations();
         renderDashboard();
     } catch (e) {
-        errEl.textContent = t('حصل خطأ، حاول تاني.', 'Error, try again.');
+        errEl.textContent = t('حصل خطأ: ' + (e.message || e), 'Error: ' + (e.message || e));
         console.error(e);
     }
 }
