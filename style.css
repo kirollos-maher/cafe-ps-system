@@ -253,9 +253,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .mode-option:hover { border-color: var(--border-strong); }
 .mode-option.selected-single { border-color: var(--amber); background: var(--amber-dim); }
 .mode-option.selected-multi { border-color: var(--teal); background: var(--teal-dim); }
+.mode-option.selected-purple { border-color: var(--purple); background: var(--purple-dim); }
 .mode-option .mode-icon { font-size: 28px; display: block; margin-bottom: 6px; }
 .mode-option .mode-name { font-weight: 700; font-size: 15px; }
 .mode-option .mode-rate { font-family: var(--font-mono); font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+#stationTypeSelector { grid-template-columns: repeat(3, 1fr); }
 
 /* ---------- timer type selection ---------- */
 .timer-selector {
