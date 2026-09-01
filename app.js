@@ -4182,6 +4182,295 @@ async function deleteMenuItem() {
     await deleteMenuItemById(id);
 }
 
+// ============================================================
+// PDF MENU IMPORT
+// ============================================================
+let pdfImportParsedData = null; // [{ name: string|null, category: 'cold_drinks'|'hot_drinks'|'food'|'other', items: [{tempId,name,price,include}] }]
+
+function openPdfImportSheet() {
+    document.getElementById('pdfImportFileInput').value = '';
+    document.getElementById('pdfImportStatus').textContent = '';
+    document.getElementById('pdfImportError').textContent = '';
+    document.getElementById('pdfImportAnalyzeBtn').disabled = false;
+    document.getElementById('pdfImportUploadStep').style.display = 'block';
+    document.getElementById('pdfImportReviewStep').style.display = 'none';
+    pdfImportParsedData = null;
+    openSheet('pdfImportOverlay');
+}
+
+function cancelPdfImportReview() {
+    closeSheet('pdfImportOverlay');
+    pdfImportParsedData = null;
+}
+
+// Groups raw pdf.js text items (from getTextContent) into visual lines by Y position,
+// keeping the max font size per line to help tell category headers from item lines.
+function groupPdfTextIntoLines(items) {
+    const rows = [];
+    items.forEach(item => {
+        if (!item.str || !item.str.trim()) return;
+        const fontSize = Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 10;
+        const y = Math.round(item.transform[5]);
+        const x = item.transform[4];
+        let row = rows.find(r => Math.abs(r.y - y) < 3);
+        if (!row) {
+            row = { y, parts: [] };
+            rows.push(row);
+        }
+        row.parts.push({ x, str: item.str, fontSize });
+    });
+    rows.sort((a, b) => b.y - a.y);
+    return rows.map(row => {
+        row.parts.sort((a, b) => a.x - b.x);
+        const text = row.parts.map(p => p.str).join(' ').replace(/\s+/g, ' ').trim();
+        const maxFontSize = Math.max(...row.parts.map(p => p.fontSize));
+        return { text, fontSize: maxFontSize };
+    }).filter(l => l.text);
+}
+
+// Pulls a trailing price (with optional dot-leaders and currency word) off the end of a line.
+function extractPriceFromPdfLine(text) {
+    const regex = /([.\-_·•\s]{2,}|\s)(\d+(?:[.,]\d{1,2})?)\s*(ج\.?م\.?|جنيه(?:اً|ا)?|جنيه مصري|EGP|LE|L\.E\.?|\$|USD|EUR|€)?\s*$/i;
+    const match = text.match(regex);
+    if (!match) return null;
+    const price = parseFloat(match[2].replace(',', '.'));
+    if (isNaN(price) || price <= 0 || price > 100000) return null;
+    const name = text.slice(0, match.index).replace(/[.\-_·•\s]+$/, '').trim();
+    if (!name || name.length > 80) return null;
+    return { name, price };
+}
+
+// Best-effort mapping of a detected header/category text to this app's fixed 4 categories.
+function guessMenuCategoryFromText(text) {
+    const v = String(text || '').trim().toLowerCase();
+    if (!v) return 'other';
+    const coldKeywords = ['مشروبات باردة', 'عصير', 'عصائر', 'مياه غازية', 'كولا', 'باردة', 'cold', 'juice', 'soda', 'soft drink'];
+    const hotKeywords = ['مشروبات ساخنة', 'قهوة', 'شاي', 'نسكافيه', 'كابتشينو', 'اسبريسو', 'ساخنة', 'hot', 'coffee', 'tea', 'cappuccino', 'espresso'];
+    const foodKeywords = ['أكل', 'اكل', 'طعام', 'ساندوتش', 'ساندويتش', 'برجر', 'بيتزا', 'وجبات', 'مقبلات', 'food', 'burger', 'pizza', 'sandwich', 'meal', 'snack'];
+    if (coldKeywords.some(k => v.includes(k))) return 'cold_drinks';
+    if (hotKeywords.some(k => v.includes(k))) return 'hot_drinks';
+    if (foodKeywords.some(k => v.includes(k))) return 'food';
+    return 'other';
+}
+
+// Heuristic parser: lines ending in a price become items; short lines in a noticeably bigger
+// font (and with no price) become category headers that group the items under them.
+function parseMenuLinesIntoGroups(lines) {
+    const withPrice = lines.map(l => ({ ...l, priceInfo: extractPriceFromPdfLine(l.text) }));
+    const itemFontSizes = withPrice.filter(l => l.priceInfo).map(l => l.fontSize);
+    const avgItemFontSize = itemFontSizes.length ? itemFontSizes.reduce((a, b) => a + b, 0) / itemFontSizes.length : 12;
+
+    const groups = [];
+    let currentGroup = { name: null, items: [] };
+    let itemCounter = 0;
+
+    const pushCurrentGroup = () => { if (currentGroup.items.length > 0) groups.push(currentGroup); };
+
+    withPrice.forEach(line => {
+        const text = line.text.trim();
+        if (!text) return;
+        if (line.priceInfo) {
+            itemCounter++;
+            currentGroup.items.push({
+                tempId: 'pdfitem_' + itemCounter,
+                name: line.priceInfo.name,
+                price: line.priceInfo.price,
+                include: true
+            });
+        } else {
+            const wordCount = text.split(/\s+/).length;
+            const isBigger = line.fontSize >= avgItemFontSize * 1.12;
+            if (wordCount <= 6 && text.length <= 40 && isBigger) {
+                pushCurrentGroup();
+                currentGroup = { name: text, items: [] };
+            }
+            // otherwise treat as noise/description and ignore it
+        }
+    });
+    pushCurrentGroup();
+
+    // merge groups that share the same header text (e.g. repeated across pages)
+    const merged = [];
+    groups.forEach(g => {
+        const existing = merged.find(m => (m.name || '').trim().toLowerCase() === (g.name || '').trim().toLowerCase());
+        if (existing) existing.items.push(...g.items);
+        else merged.push(g);
+    });
+    return merged.map(g => ({ ...g, category: guessMenuCategoryFromText(g.name) }));
+}
+
+async function analyzePdfMenu() {
+    const fileInput = document.getElementById('pdfImportFileInput');
+    const statusEl = document.getElementById('pdfImportStatus');
+    const errEl = document.getElementById('pdfImportError');
+    const btn = document.getElementById('pdfImportAnalyzeBtn');
+    errEl.textContent = '';
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        errEl.textContent = t('⚠️ اختار ملف PDF الأول', '⚠️ Choose a PDF file first');
+        return;
+    }
+    if (typeof pdfjsLib === 'undefined') {
+        errEl.textContent = t('⚠️ مقدرناش نقرا الملف ده، جرب تاني', '⚠️ Couldn\'t read this file, try again');
+        return;
+    }
+
+    const file = fileInput.files[0];
+    btn.disabled = true;
+    statusEl.textContent = t('⏳ جاري قراءة الملف...', '⏳ Reading file...');
+
+    try {
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+        }
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+        const allLines = [];
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            allLines.push(...groupPdfTextIntoLines(textContent.items));
+        }
+
+        statusEl.textContent = t('⏳ جاري تحليل الأصناف والتصنيفات...', '⏳ Analyzing items and categories...');
+        const parsed = parseMenuLinesIntoGroups(allLines);
+
+        if (!parsed.length || parsed.every(g => g.items.length === 0)) {
+            statusEl.textContent = '';
+            errEl.textContent = t('⚠️ معرفناش نقرأ أي أصناف من الملف. جرب ملف تاني أو أضف الأصناف يدوياً.', '⚠️ Couldn\'t read any items from this file. Try another file or add items manually.');
+            btn.disabled = false;
+            return;
+        }
+
+        pdfImportParsedData = parsed;
+        statusEl.textContent = '';
+        btn.disabled = false;
+        renderPdfImportReview();
+        document.getElementById('pdfImportUploadStep').style.display = 'none';
+        document.getElementById('pdfImportReviewStep').style.display = 'block';
+    } catch (e) {
+        console.error('PDF import error:', e);
+        statusEl.textContent = '';
+        errEl.textContent = t('⚠️ مقدرناش نقرا الملف ده، جرب ملف تاني', '⚠️ Couldn\'t read this file, try another one');
+        btn.disabled = false;
+    }
+}
+
+function renderPdfImportReview() {
+    const container = document.getElementById('pdfImportPreviewList');
+    if (!pdfImportParsedData || pdfImportParsedData.length === 0) {
+        container.innerHTML = `<div class="empty">${t('مفيش أصناف اتقرأت', 'No items found')}</div>`;
+        return;
+    }
+
+    const totalItems = pdfImportParsedData.reduce((sum, g) => sum + g.items.length, 0);
+    let html = `<div style="font-size:13px;font-weight:700;color:var(--amber);margin-bottom:10px;">${t(`✅ تم العثور على ${totalItems} صنف`, `✅ Found ${totalItems} items`)}</div>`;
+
+    const categoryOptions = [
+        { value: 'cold_drinks', label: t('🧊 مشروبات باردة', '🧊 Cold Drinks') },
+        { value: 'hot_drinks', label: t('☕ مشروبات ساخنة', '☕ Hot Drinks') },
+        { value: 'food', label: t('🍔 أكل', '🍔 Food') },
+        { value: 'other', label: t('📦 أخرى', '📦 Other') }
+    ];
+
+    pdfImportParsedData.forEach((group, gIdx) => {
+        html += `<div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px;margin-bottom:10px;">`;
+        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                    <i class="fa-solid fa-tags" style="color:var(--amber);flex-shrink:0;"></i>
+                    <span style="font-size:12.5px;color:var(--text-dim);flex-shrink:0;">${group.name ? escapeHtml(group.name) : t('بدون عنوان', 'No header')}</span>
+                    <select id="pdfGroupCat_${gIdx}" style="flex:1;min-width:130px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
+                        ${categoryOptions.map(opt => `<option value="${opt.value}" ${group.category === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
+                    </select>
+                </div>`;
+
+        group.items.forEach(item => {
+            html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border);flex-wrap:wrap;">
+                        <input type="checkbox" id="pdfItemInclude_${item.tempId}" ${item.include ? 'checked' : ''} style="width:auto;flex-shrink:0;">
+                        <input type="text" id="pdfItemName_${item.tempId}" value="${escapeHtml(item.name)}" style="flex:2;min-width:110px;padding:7px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
+                        <input type="number" id="pdfItemPrice_${item.tempId}" value="${item.price}" class="mono" style="width:78px;flex-shrink:0;padding:7px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
+                    </div>`;
+        });
+
+        html += `</div>`;
+    });
+
+    container.innerHTML = html;
+}
+
+async function confirmPdfImport() {
+    if (!pdfImportParsedData) return;
+    const errEl = document.getElementById('pdfImportReviewError');
+    const btn = document.getElementById('pdfImportConfirmBtn');
+    errEl.textContent = '';
+
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + t('جاري الإضافة...', 'Adding...');
+
+    try {
+        let addedCount = 0;
+        let hadError = false;
+
+        for (let gIdx = 0; gIdx < pdfImportParsedData.length; gIdx++) {
+            const group = pdfImportParsedData[gIdx];
+            const includedItems = group.items.filter(item => document.getElementById(`pdfItemInclude_${item.tempId}`)?.checked);
+            if (includedItems.length === 0) continue;
+
+            const catSelect = document.getElementById(`pdfGroupCat_${gIdx}`);
+            const category = normalizeMenuCategory(catSelect.value);
+
+            for (const item of includedItems) {
+                const nameVal = document.getElementById(`pdfItemName_${item.tempId}`).value.trim();
+                const priceVal = parseFloat(document.getElementById(`pdfItemPrice_${item.tempId}`).value);
+                if (!nameVal || isNaN(priceVal) || priceVal < 0) { hadError = true; continue; }
+                try {
+                    const newItem = {
+                        business_id: business.id,
+                        name: nameVal,
+                        price: priceVal,
+                        category: category,
+                        active: true,
+                        created_at: new Date().toISOString()
+                    };
+                    const saved = await saveMenuItemToDB(newItem);
+                    if (saved) {
+                        menuItems.push(saved);
+                        addedCount++;
+                    } else {
+                        hadError = true;
+                    }
+                } catch (e) {
+                    console.error('PDF import item error:', e);
+                    hadError = true;
+                }
+            }
+        }
+
+        renderSettings();
+        renderMenuQuickAdd();
+        if (typeof renderStationOrdersSection === 'function') renderStationOrdersSection();
+
+        closeSheet('pdfImportOverlay');
+        pdfImportParsedData = null;
+
+        if (addedCount > 0) {
+            showToast(hadError
+                ? t('⚠️ حصل خطأ أثناء إضافة بعض الأصناف', '⚠️ Something went wrong adding some items')
+                : t('✅ تم إضافة الأصناف للمنيو بنجاح', '✅ Items added to the menu successfully'),
+                hadError ? 'error' : 'success');
+        } else {
+            errEl.textContent = t('⚠️ حصل خطأ أثناء إضافة الأصناف', '⚠️ Something went wrong adding the items');
+        }
+    } catch (e) {
+        console.error('PDF import confirm error:', e);
+        errEl.textContent = t('حصل خطأ، حاول تاني', 'An error occurred, try again');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
 function openEmployeeSheet() {
     document.getElementById('employeeName').value = '';
     document.getElementById('employeePin').value = '';
