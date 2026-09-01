@@ -1266,8 +1266,8 @@ function formatElapsed(start) {
 function updateStationTypeCounts() {
     if (typeof stations === 'undefined' || !stations) return;
 
-    const billiardStations = stations.filter(st => st.station_type === 'billiard' || !st.station_type);
-    const playstationStations = stations.filter(st => st.station_type === 'playstation');
+    const billiardStations = stations.filter(st => st.station_type === 'billiard');
+    const playstationStations = stations.filter(st => st.station_type === 'playstation' || !st.station_type);
     const drinksStations = stations.filter(st => st.station_type === 'drinks');
 
     const billiardOccupied = billiardStations.filter(st => sessions && sessions[st.id]).length;
@@ -1583,7 +1583,7 @@ function renderSettingsStations() {
         const displayName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
         const subLabel = st.station_type === 'drinks'
             ? t('طلبات فقط (بدون وقت)', 'Orders only (no timer)')
-            : `${st.station_type === 'playstation' ? t('بلايستيشن', 'PlayStation') : t('بلياردو', 'Billiard')} — ${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}`;
+            : `${st.station_type === 'billiard' ? t('بلياردو', 'Billiard') : t('بلايستيشن', 'PlayStation')} — ${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}`;
         return `<div class="list-row">
             <div><div class="row-title">${escapeHtml(displayName)}</div><div class="row-sub">${t('رقم', 'No.')} ${st.number} — ${subLabel}</div></div>
             <div class="row-actions">
@@ -1631,7 +1631,7 @@ function editStation(stationId) {
     document.getElementById('stationDeleteBtn').style.display = 'flex';
     document.getElementById('stationManageError').textContent = '';
     document.getElementById('stationManagementTitle').textContent = t('تعديل جهاز', 'Edit Device');
-    selectStationType(st.station_type === 'drinks' ? 'drinks' : (st.station_type === 'playstation' ? 'playstation' : 'billiard'));
+    selectStationType(st.station_type === 'drinks' ? 'drinks' : (st.station_type === 'billiard' ? 'billiard' : 'playstation'));
     openSheet('stationManagementOverlay');
 }
 
