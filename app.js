@@ -1266,17 +1266,24 @@ function formatElapsed(start) {
 function updateStationTypeCounts() {
     if (typeof stations === 'undefined' || !stations) return;
 
+    // ✅ فصل الأجهزة حسب النوع بالضبط
     const billiardStations = stations.filter(st => st.station_type === 'billiard');
-    const playstationStations = stations.filter(st => st.station_type === 'playstation' || !st.station_type);
+    const playstationStations = stations.filter(st => st.station_type === 'playstation');
     const drinksStations = stations.filter(st => st.station_type === 'drinks');
 
+    // ✅ إحصائيات البلياردو
     const billiardOccupied = billiardStations.filter(st => sessions && sessions[st.id]).length;
     const billiardAvailable = billiardStations.length - billiardOccupied;
+    
+    // ✅ إحصائيات البلايستيشن
     const playstationOccupied = playstationStations.filter(st => sessions && sessions[st.id]).length;
     const playstationAvailable = playstationStations.length - playstationOccupied;
+    
+    // ✅ إحصائيات المشروبات
     const drinksOccupied = drinksStations.filter(st => sessions && sessions[st.id]).length;
     const drinksAvailable = drinksStations.length - drinksOccupied;
 
+    // ✅ تحديث الـ DOM
     const elBillAvail = document.getElementById('dashBilliardAvailable');
     const elBillOcc = document.getElementById('dashBilliardOccupied');
     const elPsAvail = document.getElementById('dashPlaystationAvailable');
