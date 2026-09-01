@@ -1,106 +1,686 @@
-// V2 NOTE: Browser code is not a security boundary. Production authorization must be enforced by Supabase Auth + RLS.
 // ============================================================
-// CONFIG
+// app.js - كامل منطق التطبيق (نسخة مع Realtime Sync & Shift History)
 // ============================================================
-const SUPABASE_URL = 'https://fhjhtgbvtkuhhzitvxtx.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_X0aLD3gjXGqC_no4gW78ng_TWztP5cd';
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// V2 safety helpers: never report success when Supabase rejected the operation.
-async function dbResult(promise, context = 'Database operation') {
-    const result = await promise;
-    if (result?.error) {
-        console.error(context, result.error);
-        throw result.error;
-    }
-    return result;
-}
-function assertBusinessContext() {
-    if (!business?.id) throw new Error('Business context is missing');
-}
-function assertPositiveNumber(value, label) {
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < 0) throw new Error(`${label} must be a valid non-negative number`);
-    return n;
-}
-
 
 // ============================================================
-// LANGUAGE STATE
+// استيراد الـ supabaseClient من window
+// ============================================================
+const supabaseClient = window.supabaseClient;
+
+if (!supabaseClient) {
+    console.error('❌ supabaseClient is not defined! Check config.js loading order.');
+    document.addEventListener('DOMContentLoaded', function() {
+        const errEl = document.getElementById('setupError');
+        if (errEl) errEl.textContent = '⚠️ خطأ في تحميل الاتصال بقاعدة البيانات. تأكد من اتصال الإنترنت.';
+    });
+} else {
+    console.log('✅ supabaseClient is ready in app.js');
+}
+
+// ============================================================
+// TRANSLATIONS - النسخة الكاملة
 // ============================================================
 let currentLang = 'ar';
-let shiftFilter = 'all';
+
+const translations = {
+    ar: {
+        'platepro': '✦ PLATE PRO ✦',
+        'welcome': 'مرحباً بك',
+        'business_code': 'كود النشاط التجاري',
+        'continue': 'متابعة',
+        'back': 'رجوع',
+        'save': 'حفظ',
+        'cancel': 'إلغاء',
+        'close': 'إغلاق',
+        'delete': 'حذف',
+        'edit': 'تعديل',
+        'add': 'إضافة',
+        'today_performance': '📊 أداء اليوم',
+        'today_revenue': '💰 إيراد اليوم',
+        'active_orders': '📋 الطلبات النشطة',
+        'occupied_tables': '🪑 طاولات مشغولة',
+        'available_tables': '🟢 طاولات متاحة',
+        'quick_actions': '⚡ إجراءات سريعة',
+        'add_expense': 'إضافة مصروف',
+        'close_shift': 'إقفال الشيفت',
+        'open_new_shift': 'فتح شيفت جديد',
+        'scan_order': '📱 امسح واطلب من مكانك',
+        'all': '🍽️ الكل',
+        'cart': '🛒 سلة الطلبات',
+        'empty_cart': 'السلة فارغة',
+        'subtotal': 'المجموع',
+        'service_fee': 'رسوم الخدمة',
+        'vat': 'ضريبة القيمة المضافة',
+        'total': 'الإجمالي',
+        'confirm_order': 'تأكيد الطلب',
+        'pending': '⏳ قيد الانتظار',
+        'preparing': '🔪 قيد التحضير',
+        'ready': '✅ جاهز للتسليم',
+        'paid': '💳 مدفوع',
+        'cancelled': '❌ ملغي',
+        'order': 'طلب',
+        'table': 'طاولة',
+        'print_receipt': '🖨️ طباعة الوصل',
+        'print': 'طباعة',
+        'payment': '💳 الدفع',
+        'select_payment': 'اختر طريقة الدفع',
+        'available': '🟢 متاحة',
+        'occupied': '🟡 مشغولة',
+        'reserved': '🔵 محجوزة',
+        'active': '✅ نشط',
+        'inactive': '⛔ موقف',
+        'waiter': 'نادل',
+        'chef': 'طباخ',
+        'cashier': 'كاشير',
+        'admin': 'أدمن',
+        'settings': '⚙️ الإعدادات',
+        'appearance': '🎨 المظهر',
+        'dark': '🌙 داكن',
+        'light': '☀️ فاتح',
+        'logo': '🖼️ الشعار',
+        'fees': '💰 الرسوم والضرائب',
+        'service_fee_label': 'رسوم الخدمة',
+        'vat_label': 'ضريبة القيمة المضافة (VAT)',
+        'payment_methods': '💳 طرق الدفع',
+        'employees': '👥 الموظفين',
+        'switch_business': '🔄 تبديل النشاط',
+        'edit_fees': 'تعديل الرسوم',
+        'edit_logo': 'تعديل الشعار',
+        'no_logo': 'لا يوجد شعار',
+        'remove_logo': 'حذف الشعار',
+        'save_logo': 'حفظ الشعار',
+        'upload_logo': 'اختر صورة الشعار',
+        'menu': '🍽️ المنيو',
+        'manage_menu': '⚙️ إدارة المنيو',
+        'add_item': 'إضافة صنف',
+        'add_category': 'إضافة تصنيف',
+        'item_name': 'اسم الصنف',
+        'item_price': 'السعر',
+        'item_desc': 'الوصف',
+        'item_image': 'صورة الصنف',
+        'category': 'التصنيف',
+        'no_items': 'مفيش أصناف',
+        'no_categories': 'مفيش تصنيفات',
+        'qr_code': '📱 طلب من العميل',
+        'qr_label': 'QR Code الطاولات',
+        'qr_sub': 'امسح للطلب من المنيو مباشرة',
+        'show_qr': 'عرض QR',
+        'download_qr': 'تحميل QR',
+        'scan_qr': 'امسح الكود لفتح منيو العميل',
+        'expense_desc': 'الوصف',
+        'expense_amount': 'المبلغ',
+        'add_expense_title': 'إضافة مصروف',
+        'close_shift_title': 'تأكيد إقفال الشيفت',
+        'shift_revenue': 'الإيراد',
+        'shift_expenses': 'المصروفات',
+        'today_expenses': '💸 مصروفات اليوم',
+        'no_expenses': 'لا يوجد مصروفات في هذا الشيفت',
+        'shift_profit': 'الصافي',
+        'confirm_close': 'تأكيد الإقفال',
+        'no_open_shift': 'لا يوجد شيفت مفتوح',
+        'permissions': '🔐 الصلاحيات',
+        'perm_dashboard': '👀 الرئيسية',
+        'perm_tables': '🪑 الطاولات',
+        'perm_orders': '📋 الطلبات',
+        'perm_menu': '🍽️ المنيو',
+        'perm_settings': '⚙️ الإعدادات',
+        'perm_create_orders': '🛒 إنشاء طلبات',
+        'perm_add_expense': '💰 إضافة مصروف',
+        'perm_close_shift': '🔒 إقفال الشيفت',
+        'perm_print_receipt': '🧾 طباعة الفواتير',
+        'perm_manage_menu': '📝 إدارة المنيو',
+        'perm_view_revenue': '💰 مشاهدة الإيراد',
+        'perm_view_expenses': '📊 مشاهدة المصروفات',
+        'employee_name': 'الاسم',
+        'employee_pin': 'PIN (4 أرقام)',
+        'employee_role': 'الدور',
+        'add_employee': 'إضافة موظف',
+        'edit_employee': 'تعديل موظف',
+        'payment_method_name': 'اسم طريقة الدفع',
+        'payment_method_icon': 'الأيقونة',
+        'add_payment_method': 'إضافة طريقة دفع',
+        'edit_payment_method': 'تعديل طريقة دفع',
+        'cash': 'كاش',
+        'card': 'بطاقة',
+        'wallet': 'محفظة',
+        'mobile_wallet': 'محفظة إلكترونية',
+        'bank_transfer': 'تحويل بنكي',
+        'category_name': 'اسم التصنيف',
+        'category_icon': 'الأيقونة',
+        'add_category_title': 'إضافة تصنيف',
+        'order_created': '✅ تم إنشاء الطلب بنجاح!',
+        'order_updated': '✅ تم تحديث حالة الطلب',
+        'payment_success': '✅ تم الدفع بنجاح!',
+        'payment_failed': '❌ فشل الدفع',
+        'expense_added': '✅ تم تسجيل المصروف',
+        'shift_closed': '✅ تم إقفال الشيفت',
+        'shift_close_failed': '❌ فشل إقفال الشيفت',
+        'item_added': '✅ تم إضافة الصنف',
+        'item_updated': '✅ تم تحديث الصنف',
+        'item_deleted': '✅ تم حذف الصنف',
+        'category_added': '✅ تم إضافة التصنيف',
+        'payment_method_added': '✅ تم إضافة طريقة الدفع',
+        'employee_added': '✅ تم إضافة الموظف',
+        'employee_updated': '✅ تم تحديث الموظف',
+        'employee_deleted': '✅ تم حذف الموظف',
+        'logo_saved': '✅ تم حفظ الشعار',
+        'logo_deleted': '✅ تم حذف الشعار',
+        'fees_saved': '✅ تم حفظ الإعدادات',
+        'error_general': '⚠️ حدث خطأ، حاول تاني',
+        'error_connection': '⚠️ حصل خطأ في الاتصال',
+        'error_invalid_code': '⚠️ كود النشاط غير صحيح',
+        'error_invalid_pin': '⚠️ PIN غير صحيح',
+        'error_no_items': '⚠️ أضف صنف واحد على الأقل',
+        'error_no_tables': '⚠️ مفيش طاولات متاحة',
+        'error_permission': '⛔ ليس لديك صلاحية',
+        'error_upload': '⚠️ فشل رفع الصورة',
+        'recent_orders': '📜 آخر الطلبات',
+        'order_details': 'تفاصيل الطلب',
+        'tables': '🪑 الطاولات',
+        'kitchen': '👨‍🍳 الأوردرات',
+        'kitchen_orders': '📋 الأوردرات النشطة',
+        'no_kitchen_orders': 'مفيش أوردرات نشطة',
+        'items': 'أصناف',
+        'more': 'أكثر',
+        'ready_to_serve': '🛎️ جاهز للتسليم',
+        'dashboard': 'الرئيسية',
+        'activate': 'تفعيل',
+        'qr_generated': '✅ تم توليد QR Code',
+        'start_preparing': '🔪 بدء التحضير',
+        'ready_for_delivery': '✅ جاهز للتسليم',
+        'deliver': '🚚 تسليم',
+        'delivered': '✅ تم التوصيل',
+        'chef_view': '👨‍🍳 عرض المطبخ',
+        'persons': 'أشخاص',
+        'manage_tables': '🪑 إدارة الطاولات',
+        'add_table': 'إضافة طاولة',
+        'edit_table': 'تعديل طاولة',
+        'delete_table': 'حذف طاولة',
+        'no_tables': 'مفيش طاولات',
+        'table_added': '✅ تم إضافة الطاولة',
+        'table_updated': '✅ تم تحديث الطاولة',
+        'table_deleted': '✅ تم حذف الطاولة',
+        'delete_table_confirm': 'متأكد من حذف الطاولة؟',
+        'shift_history': '📋 سجل الشيفتات',
+        'no_shift_history': 'مفيش شيفتات مقفولة',
+        'preparing_started': '🔪 جاري التحضير...',
+        'order_ready_notification': '✅ الطلب جاهز! إشعار للويتر',
+        'order_delivered': '✅ تم توصيل الطلب للعميل',
+        'table_number': 'رقم الطاولة',
+        'capacity': 'السعة (أشخاص)',
+        'status': 'الحالة',
+        'device_activated': '✅ تم تفعيل الجهاز بنجاح',
+        'item_added_to_order': '✅ تم إضافة {name}',
+        'loading': 'جاري التحميل...',
+        'default_item': 'صنف',
+        'no_open_shift': 'لا يوجد شيفت مفتوح',
+        'orders': '📋 الطلبات',
+        'generate': 'توليد',
+        'shift_open': '✅ شيفت مفتوح',
+        'shift_closed': '🔴 شيفت مقفول',
+        'menu_categories': '📂 التصنيفات',
+        'import_pdf': 'استيراد من PDF',
+        'import_pdf_title': 'استيراد المنيو من PDF',
+        'import_pdf_hint': 'ارفع ملف PDF فيه المنيو، والنظام هيحاول يقرأ الأصناف والتصنيفات تلقائياً. هتقدر تراجع وتعدل قبل الإضافة النهائية.',
+        'import_pdf_file': 'ملف المنيو (PDF)',
+        'import_pdf_analyze': 'تحليل الملف',
+        'import_pdf_review_hint': 'راجع الأصناف اللي اتقرأت من الملف. الغي أي صنف مش مضبوط، عدّل الاسم/السعر/التصنيف، أو ضيف تصنيف جديد بايدك. الأصناف المحددة فقط هتتضاف للمنيو.',
+        'import_pdf_confirm': 'إضافة المحدد للمنيو',
+        'pdf_status_reading': '⏳ جاري قراءة الملف...',
+        'pdf_status_parsing': '⏳ جاري تحليل الأصناف والتصنيفات...',
+        'pdf_no_items_found': '⚠️ معرفناش نقرأ أي أصناف من الملف. جرب ملف تاني أو أضف الأصناف يدوياً.',
+        'pdf_items_found': '✅ تم العثور على {count} صنف',
+        'pdf_new_category': 'تصنيف جديد',
+        'pdf_uncategorized': 'بدون تصنيف',
+        'pdf_add_new_category': '+ تصنيف جديد',
+        'pdf_new_category_placeholder': 'اسم التصنيف الجديد',
+        'pdf_import_success': '✅ تم إضافة الأصناف للمنيو بنجاح',
+        'pdf_import_error': '⚠️ حصل خطأ أثناء إضافة بعض الأصناف',
+        'pdf_select_all': 'تحديد الكل',
+        'pdf_deselect_all': 'إلغاء تحديد الكل',
+        'pdf_error_no_file': '⚠️ اختار ملف PDF الأول',
+        'pdf_error_read_fail': '⚠️ مقدرناش نقرا الملف ده، جرب ملف تاني'
+    },
+    en: {
+        'platepro': '✦ PLATE PRO ✦',
+        'welcome': 'Welcome',
+        'business_code': 'Business Code',
+        'continue': 'Continue',
+        'back': 'Back',
+        'save': 'Save',
+        'cancel': 'Cancel',
+        'close': 'Close',
+        'delete': 'Delete',
+        'edit': 'Edit',
+        'add': 'Add',
+        'today_performance': '📊 Today\'s Performance',
+        'today_revenue': '💰 Today\'s Revenue',
+        'active_orders': '📋 Active Orders',
+        'occupied_tables': '🪑 Occupied Tables',
+        'available_tables': '🟢 Available Tables',
+        'quick_actions': '⚡ Quick Actions',
+        'add_expense': 'Add Expense',
+        'close_shift': 'Close Shift',
+        'open_new_shift': 'Open New Shift',
+        'scan_order': '📱 Scan & Order from your table',
+        'all': '🍽️ All',
+        'cart': '🛒 Cart',
+        'empty_cart': 'Cart is empty',
+        'subtotal': 'Subtotal',
+        'service_fee': 'Service Fee',
+        'vat': 'VAT',
+        'total': 'Total',
+        'confirm_order': 'Confirm Order',
+        'pending': '⏳ Pending',
+        'preparing': '🔪 Preparing',
+        'ready': '✅ Ready for Delivery',
+        'paid': '💳 Paid',
+        'cancelled': '❌ Cancelled',
+        'order': 'Order',
+        'table': 'Table',
+        'print_receipt': '🖨️ Print Receipt',
+        'print': 'Print',
+        'payment': '💳 Payment',
+        'select_payment': 'Select Payment Method',
+        'available': '🟢 Available',
+        'occupied': '🟡 Occupied',
+        'reserved': '🔵 Reserved',
+        'active': '✅ Active',
+        'inactive': '⛔ Inactive',
+        'waiter': 'Waiter',
+        'chef': 'Chef',
+        'cashier': 'Cashier',
+        'admin': 'Admin',
+        'settings': '⚙️ Settings',
+        'appearance': '🎨 Appearance',
+        'dark': '🌙 Dark',
+        'light': '☀️ Light',
+        'logo': '🖼️ Logo',
+        'fees': '💰 Fees & Taxes',
+        'service_fee_label': 'Service Fee',
+        'vat_label': 'VAT',
+        'payment_methods': '💳 Payment Methods',
+        'employees': '👥 Employees',
+        'switch_business': '🔄 Switch Business',
+        'edit_fees': 'Edit Fees',
+        'edit_logo': 'Edit Logo',
+        'no_logo': 'No Logo',
+        'remove_logo': 'Remove Logo',
+        'save_logo': 'Save Logo',
+        'upload_logo': 'Upload Logo Image',
+        'menu': '🍽️ Menu',
+        'manage_menu': '⚙️ Manage Menu',
+        'add_item': 'Add Item',
+        'add_category': 'Add Category',
+        'item_name': 'Item Name',
+        'item_price': 'Price',
+        'item_desc': 'Description',
+        'item_image': 'Item Image',
+        'category': 'Category',
+        'no_items': 'No items',
+        'no_categories': 'No categories',
+        'qr_code': '📱 Customer Order',
+        'qr_label': 'Tables QR Code',
+        'qr_sub': 'Scan to order directly from menu',
+        'show_qr': 'Show QR',
+        'download_qr': 'Download QR',
+        'scan_qr': 'Scan code to open customer menu',
+        'expense_desc': 'Description',
+        'expense_amount': 'Amount',
+        'add_expense_title': 'Add Expense',
+        'close_shift_title': 'Confirm Close Shift',
+        'shift_revenue': 'Revenue',
+        'shift_expenses': 'Expenses',
+        'today_expenses': '💸 Today\'s Expenses',
+        'no_expenses': 'No expenses recorded this shift',
+        'shift_profit': 'Net Profit',
+        'confirm_close': 'Confirm Close',
+        'no_open_shift': 'No open shift',
+        'permissions': '🔐 Permissions',
+        'perm_dashboard': '👀 Dashboard',
+        'perm_tables': '🪑 Tables',
+        'perm_orders': '📋 Orders',
+        'perm_menu': '🍽️ Menu',
+        'perm_settings': '⚙️ Settings',
+        'perm_create_orders': '🛒 Create Orders',
+        'perm_add_expense': '💰 Add Expense',
+        'perm_close_shift': '🔒 Close Shift',
+        'perm_print_receipt': '🧾 Print Receipt',
+        'perm_manage_menu': '📝 Manage Menu',
+        'perm_view_revenue': '💰 View Revenue',
+        'perm_view_expenses': '📊 View Expenses',
+        'employee_name': 'Name',
+        'employee_pin': 'PIN (4 digits)',
+        'employee_role': 'Role',
+        'add_employee': 'Add Employee',
+        'edit_employee': 'Edit Employee',
+        'payment_method_name': 'Payment Method Name',
+        'payment_method_icon': 'Icon',
+        'add_payment_method': 'Add Payment Method',
+        'edit_payment_method': 'Edit Payment Method',
+        'cash': 'Cash',
+        'card': 'Card',
+        'wallet': 'Wallet',
+        'mobile_wallet': 'Mobile Wallet',
+        'bank_transfer': 'Bank Transfer',
+        'category_name': 'Category Name',
+        'category_icon': 'Icon',
+        'add_category_title': 'Add Category',
+        'order_created': '✅ Order created successfully!',
+        'order_updated': '✅ Order status updated',
+        'payment_success': '✅ Payment successful!',
+        'payment_failed': '❌ Payment failed',
+        'expense_added': '✅ Expense recorded',
+        'shift_closed': '✅ Shift closed',
+        'shift_close_failed': '❌ Failed to close shift',
+        'item_added': '✅ Item added',
+        'item_updated': '✅ Item updated',
+        'item_deleted': '✅ Item deleted',
+        'category_added': '✅ Category added',
+        'payment_method_added': '✅ Payment method added',
+        'employee_added': '✅ Employee added',
+        'employee_updated': '✅ Employee updated',
+        'employee_deleted': '✅ Employee deleted',
+        'logo_saved': '✅ Logo saved',
+        'logo_deleted': '✅ Logo deleted',
+        'fees_saved': '✅ Settings saved',
+        'error_general': '⚠️ An error occurred, please try again',
+        'error_connection': '⚠️ Connection error',
+        'error_invalid_code': '⚠️ Invalid business code',
+        'error_invalid_pin': '⚠️ Incorrect PIN',
+        'error_no_items': '⚠️ Add at least one item',
+        'error_no_tables': '⚠️ No tables available',
+        'error_permission': '⛔ You don\'t have permission',
+        'error_upload': '⚠️ Image upload failed',
+        'recent_orders': '📜 Recent Orders',
+        'order_details': 'Order Details',
+        'tables': '🪑 Tables',
+        'kitchen': '👨‍🍳 Orders',
+        'kitchen_orders': '📋 Active Orders',
+        'no_kitchen_orders': 'No active orders',
+        'items': 'items',
+        'more': 'more',
+        'ready_to_serve': '🛎️ Ready to Serve',
+        'dashboard': 'Dashboard',
+        'activate': 'Activate',
+        'qr_generated': '✅ QR Code generated',
+        'start_preparing': '🔪 Start Preparing',
+        'ready_for_delivery': '✅ Ready for Delivery',
+        'deliver': '🚚 Deliver',
+        'delivered': '✅ Delivered',
+        'chef_view': '👨‍🍳 Kitchen View',
+        'persons': 'persons',
+        'manage_tables': '🪑 Manage Tables',
+        'add_table': 'Add Table',
+        'edit_table': 'Edit Table',
+        'delete_table': 'Delete Table',
+        'no_tables': 'No tables',
+        'table_added': '✅ Table added',
+        'table_updated': '✅ Table updated',
+        'table_deleted': '✅ Table deleted',
+        'delete_table_confirm': 'Delete this table?',
+        'shift_history': '📋 Shift History',
+        'no_shift_history': 'No closed shifts',
+        'preparing_started': '🔪 Preparing...',
+        'order_ready_notification': '✅ Order ready! Notifying waiter',
+        'order_delivered': '✅ Order delivered to customer',
+        'table_number': 'Table Number',
+        'capacity': 'Capacity (persons)',
+        'status': 'Status',
+        'device_activated': '✅ Device activated successfully',
+        'item_added_to_order': '✅ {name} added',
+        'loading': 'Loading...',
+        'default_item': 'Item',
+        'no_open_shift': 'No open shift',
+        'orders': '📋 Orders',
+        'generate': 'Generate',
+        'shift_open': '✅ Shift Open',
+        'shift_closed': '🔴 Shift Closed',
+        'menu_categories': '📂 Categories',
+        'import_pdf': 'Import from PDF',
+        'import_pdf_title': 'Import Menu from PDF',
+        'import_pdf_hint': 'Upload a PDF file with your menu, and the system will try to automatically read the items and categories. You can review and edit before the final import.',
+        'import_pdf_file': 'Menu File (PDF)',
+        'import_pdf_analyze': 'Analyze File',
+        'import_pdf_review_hint': 'Review the items detected from the file. Uncheck anything wrong, edit the name/price/category, or add a new category yourself. Only checked items will be added to the menu.',
+        'import_pdf_confirm': 'Add Selected to Menu',
+        'pdf_status_reading': '⏳ Reading file...',
+        'pdf_status_parsing': '⏳ Analyzing items and categories...',
+        'pdf_no_items_found': '⚠️ Couldn\'t read any items from this file. Try another file or add items manually.',
+        'pdf_items_found': '✅ Found {count} items',
+        'pdf_new_category': 'New category',
+        'pdf_uncategorized': 'No category',
+        'pdf_add_new_category': '+ New category',
+        'pdf_new_category_placeholder': 'New category name',
+        'pdf_import_success': '✅ Items added to the menu successfully',
+        'pdf_import_error': '⚠️ Something went wrong adding some items',
+        'pdf_select_all': 'Select all',
+        'pdf_deselect_all': 'Deselect all',
+        'pdf_error_no_file': '⚠️ Choose a PDF file first',
+        'pdf_error_read_fail': '⚠️ Couldn\'t read this file, try another one'
+    }
+};
 
 function toggleLanguage() {
     currentLang = currentLang === 'ar' ? 'en' : 'ar';
     document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = currentLang;
     document.getElementById('langToggleLabel').textContent = currentLang === 'ar' ? 'English' : 'العربية';
-    updateTexts();
+    applyTranslations();
 }
 
-function updateTexts() {
-    document.querySelectorAll('[data-ar][data-en]').forEach(el => {
-        el.textContent = currentLang === 'ar' ? el.dataset.ar : el.dataset.en;
-    });
-    document.querySelectorAll('select option[data-ar][data-en]').forEach(el => {
-        el.textContent = currentLang === 'ar' ? el.dataset.ar : el.dataset.en;
-    });
-    
-    // تحديث أسماء الأشهر
-    updateMonthNames();
-    
-    renderStationsGrid();
-    renderSettingsStations();
-    renderSettingsPaymentMethods();
-    if (document.getElementById('view-shift').classList.contains('active')) renderShiftView();
-    if (document.getElementById('view-settings').classList.contains('active')) renderSettings();
-}
-
-function updateMonthNames() {
-    const monthSelect = document.getElementById('monthSelect');
-    if (!monthSelect) return;
-    
-    const monthNamesAr = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
-    const monthNamesEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthNames = currentLang === 'ar' ? monthNamesAr : monthNamesEn;
-    
-    monthSelect.querySelectorAll('option').forEach((option, index) => {
-        option.textContent = monthNames[index];
-    });
-}
-
-function populateYearSelect() {
-    const yearSelect = document.getElementById('yearSelect');
-    if (!yearSelect) return;
-    
-    const currentYear = new Date().getFullYear();
-    yearSelect.innerHTML = '';
-    for (let year = currentYear; year >= currentYear - 5; year--) {
-        const option = document.createElement('option');
-        option.value = year;
-        option.textContent = year;
-        yearSelect.appendChild(option);
+function t(key, replace = null) {
+    let text = translations[currentLang][key] || key;
+    if (replace) {
+        for (const [k, v] of Object.entries(replace)) {
+            text = text.replace(`{${k}}`, v);
+        }
     }
-    yearSelect.value = currentYear;
+    return text;
 }
 
-function applyMonthlyFilter() {
-    renderShiftView();
-}
-
-function setShiftFilter(filter) {
-    shiftFilter = filter;
-    document.querySelectorAll('.shift-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.filter === filter);
+function applyTranslations() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.dataset.i18n;
+        if (key) {
+            const translation = t(key);
+            if (translation && translation !== key) {
+                el.textContent = translation;
+            }
+        }
     });
-    
-    const monthlyFilter = document.getElementById('monthlyFilter');
-    if (monthlyFilter) {
-        monthlyFilter.style.display = filter === 'monthly' ? 'flex' : 'none';
+    renderDashboard();
+    renderTables();
+    renderKitchenOrders();
+    renderMenuView();
+    renderSettings();
+    updateShiftIndicator();
+}
+
+// ============================================================
+// FEES STATE
+// ============================================================
+let serviceFeePercent = 10;
+let vatPercent = 14;
+let businessLogo = null;
+
+function loadFeesSettings() {
+    const saved = localStorage.getItem('platepro_service_fee');
+    if (saved) serviceFeePercent = parseFloat(saved) || 10;
+    const savedVat = localStorage.getItem('platepro_vat');
+    if (savedVat) vatPercent = parseFloat(savedVat) || 14;
+}
+
+function saveFeesSettings() {
+    const serviceInput = document.getElementById('serviceFeeInput');
+    const vatInput = document.getElementById('vatInput');
+    const errEl = document.getElementById('feesError');
+
+    const service = parseFloat(serviceInput.value);
+    const vat = parseFloat(vatInput.value);
+
+    if (isNaN(service) || service < 0) { errEl.textContent = t('error_general'); return; }
+    if (isNaN(vat) || vat < 0) { errEl.textContent = t('error_general'); return; }
+
+    serviceFeePercent = service;
+    vatPercent = vat;
+    localStorage.setItem('platepro_service_fee', service.toString());
+    localStorage.setItem('platepro_vat', vat.toString());
+
+    closeSheet('settingsFeesOverlay');
+    showToast(t('fees_saved'), 'success');
+    renderSettings();
+    updateCustomerCartUI();
+}
+
+function openFeesSettings() {
+    document.getElementById('serviceFeeInput').value = serviceFeePercent;
+    document.getElementById('vatInput').value = vatPercent;
+    document.getElementById('feesError').textContent = '';
+    openSheet('settingsFeesOverlay');
+}
+
+// ============================================================
+// LOGO MANAGEMENT
+// ============================================================
+function loadLogo() {
+    const saved = localStorage.getItem('platepro_logo');
+    if (saved) {
+        businessLogo = saved;
+        updateLogoUI();
     }
-    
-    renderShiftView();
+}
+
+function updateLogoUI() {
+    const container = document.getElementById('bizLogoContainer');
+    const customerContainer = document.getElementById('customerLogoContainer');
+    if (businessLogo) {
+        container.innerHTML = `<img src="${businessLogo}" class="logo-img" alt="Logo">`;
+        customerContainer.innerHTML = `<img src="${businessLogo}" class="logo-img" alt="Logo">`;
+    } else {
+        container.innerHTML = '';
+        customerContainer.innerHTML = '';
+    }
+}
+
+function openLogoSettings() {
+    document.getElementById('logoInput').value = '';
+    document.getElementById('logoPreview').style.display = 'none';
+    document.getElementById('removeLogoBtn').style.display = businessLogo ? 'inline-flex' : 'none';
+    document.getElementById('logoError').textContent = '';
+    if (businessLogo) {
+        document.getElementById('logoPreviewImg').src = businessLogo;
+        document.getElementById('logoPreview').style.display = 'block';
+    }
+    openSheet('settingsLogoOverlay');
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const logoInput = document.getElementById('logoInput');
+    if (logoInput) {
+        logoInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    document.getElementById('logoPreviewImg').src = event.target.result;
+                    document.getElementById('logoPreview').style.display = 'block';
+                    document.getElementById('removeLogoBtn').style.display = 'inline-flex';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+    }
+
+    const menuImageInput = document.getElementById('menuItemImageInput');
+    if (menuImageInput) {
+        menuImageInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    document.getElementById('menuItemImagePreviewImg').src = event.target.result;
+                    document.getElementById('menuItemImagePreview').style.display = 'block';
+                    document.getElementById('menuItemImageData').value = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+    }
+});
+
+function saveLogo() {
+    const fileInput = document.getElementById('logoInput');
+    const errEl = document.getElementById('logoError');
+
+    if (fileInput.files.length === 0) {
+        errEl.textContent = t('error_general');
+        return;
+    }
+
+    const file = fileInput.files[0];
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        businessLogo = event.target.result;
+        localStorage.setItem('platepro_logo', businessLogo);
+        updateLogoUI();
+        closeSheet('settingsLogoOverlay');
+        showToast(t('logo_saved'), 'success');
+        renderSettings();
+    };
+    reader.onerror = function() {
+        errEl.textContent = t('error_upload');
+    };
+    reader.readAsDataURL(file);
+}
+
+function removeLogo() {
+    if (!confirm(t('remove_logo') + '؟')) return;
+    businessLogo = null;
+    localStorage.removeItem('platepro_logo');
+    updateLogoUI();
+    document.getElementById('logoPreview').style.display = 'none';
+    document.getElementById('removeLogoBtn').style.display = 'none';
+    document.getElementById('logoInput').value = '';
+    showToast(t('logo_deleted'), 'success');
+    renderSettings();
+}
+
+// ============================================================
+// THEME SYSTEM
+// ============================================================
+function toggleTheme() {
+    const currentTheme = localStorage.getItem('platepro_theme') || 'dark';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    applyTheme(newTheme);
+}
+
+function applyTheme(theme) {
+    if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+        localStorage.setItem('platepro_theme', 'light');
+    } else {
+        document.documentElement.removeAttribute('data-theme');
+        localStorage.setItem('platepro_theme', 'dark');
+    }
+    updateThemeToggle();
+}
+
+function loadTheme() {
+    const saved = localStorage.getItem('platepro_theme') || 'dark';
+    applyTheme(saved);
+}
+
+function updateThemeToggle() {
+    const currentTheme = localStorage.getItem('platepro_theme') || 'dark';
+    const toggle = document.getElementById('themeToggle');
+    const label = document.getElementById('themeToggleLabel');
+    if (toggle) {
+        toggle.classList.toggle('active', currentTheme === 'light');
+    }
+    if (label) {
+        label.textContent = currentTheme === 'dark' ? t('dark') : t('light');
+    }
 }
 
 // ============================================================
@@ -108,137 +688,859 @@ function setShiftFilter(filter) {
 // ============================================================
 let business = null;
 let deviceRecord = null;
-let stations = [];
-let sessions = {};
+let currentUser = null;
+let tables = [];
+let orders = {};
 let menuItems = [];
+let menuCategories = [];
 let employees = [];
 let paymentMethods = [];
 let currentShift = null;
-let currentUser = null;
-let realtimeChannel = null;
-let tickInterval = null;
-let activeStationId = null;
-let activeSessionOrders = [];
-let currentOrderSessionId = null;
+let shiftManuallyClosed = false;
+let _orderItems = [];
 let selectedPaymentMethod = null;
-let endSessionStationId = null;
-let endingSessionInProgress = false;
-let stationOrdersCache = {}; // session_id -> [{item_name, quantity}, ...] لملخص الطلبات في كارت الجهاز
-// ✅ حالة الخصم/المبلغ المدفوع لشاشة إنهاء الجلسة
-let currentEndSessionTotals = null;
-let endSessionDiscount = 0;
-let endSessionAmountPaid = null;
-let endSessionPrepaidTotal = 0;
-let sessionSegmentsCache = {};
-let activeSegmentCache = {};
-// ✅ كاش الدفعات المقدمة (قبل الجلسة/أثناءها)
-let sessionPrepaymentsCache = {};
-let pendingSwitch = false;
-let transferSourceStationId = null;
-let countdownTimers = {};
-let countdownAlerts = {};
-// تخزين حالة التوجل لكل تصنيف
-let categoryToggleState = {};
+let orderStatus = {};
+let qrGenerated = false;
+let editingTableId = null;
+let realtimeSubscription = null;
+let shiftFilter = 'daily';
 
 // ============================================================
-// ✅ TOGGLE PIN SECTION (قابل للطي)
+// CUSTOMER PAGE STATE
 // ============================================================
-let settingsPinExpanded = false;
-
-function toggleSettingsPin() {
-    settingsPinExpanded = !settingsPinExpanded;
-    const pinSection = document.getElementById('settingsChangePin');
-    const chevron = document.getElementById('settingsPinChevron');
-    
-    if (pinSection) {
-        pinSection.style.display = settingsPinExpanded ? 'block' : 'none';
-    }
-    if (chevron) {
-        chevron.style.transform = settingsPinExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
-    }
-}
+let customerCart = [];
+let customerBusiness = null;
+let customerMenuItems = [];
+let customerCategories = [];
+let currentCustomerFilter = 'all';
+let customerBusinessId = null;
 
 // ============================================================
 // UTILITIES
 // ============================================================
-function getDeviceId() {
-    let id = localStorage.getItem('psr_device_id');
-    if (!id) { id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem('psr_device_id', id); }
-    return id;
-}
-function money(n) { return (Number(n) || 0).toLocaleString(currentLang === 'ar' ? 'ar-EG' : 'en-US', { maximumFractionDigits: 0 }); }
-function moneyDec(n) { return (Number(n) || 0).toLocaleString(currentLang === 'ar' ? 'ar-EG' : 'en-US', { maximumFractionDigits: 2, minimumFractionDigits: 0 }); }
 function showToast(msg, type = 'success') {
     const el = document.getElementById('toast');
-    el.textContent = msg; el.className = 'toast ' + type; el.style.display = 'block';
-    clearTimeout(el._t); el._t = setTimeout(() => { el.style.display = 'none'; }, 2600);
+    el.textContent = msg;
+    el.className = 'toast ' + type;
+    el.style.display = 'block';
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.display = 'none'; }, 2800);
 }
+
 function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
 }
+
+function openSheet(id) { document.getElementById(id).classList.add('show'); }
+
+function closeSheet(id) { document.getElementById(id).classList.remove('show'); }
+
 function navigateTo(viewId) {
     if (currentUser && currentUser.type !== 'owner') {
         const perms = currentUser.permissions || {};
-        if (viewId === 'view-settings' && !perms.settings) viewId = 'view-dashboard';
-        if (viewId === 'view-shift' && !perms.shift) viewId = 'view-dashboard';
-        if (viewId === 'view-stations' && !perms.stations) viewId = 'view-dashboard';
+        const viewMap = {
+            'view-dashboard': 'dashboard',
+            'view-tables': 'tables',
+            'view-kitchen': 'orders',
+            'view-menu': 'menu',
+            'view-settings': 'settings',
+            'view-qr': 'dashboard',
+            'view-shift-history': 'dashboard',
+            'view-shift-detail': 'dashboard'
+        };
+        const permKey = viewMap[viewId];
+        if (permKey && !perms[permKey] && viewId !== 'view-qr' && viewId !== 'view-shift-history' && viewId !== 'view-shift-detail') {
+            showToast(t('error_permission'), 'error');
+            return;
+        }
     }
+
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
-    if (viewId === 'view-dashboard') renderDashboard();
-    if (viewId === 'view-shift') renderShiftView();
-    if (viewId === 'view-settings') { renderSettings(); renderSettingsStations(); renderSettingsPaymentMethods(); }
-    if (viewId === 'view-stations') refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
-}
-function openSheet(id) { document.getElementById(id).classList.add('show'); }
-function closeSheet(id) {
-    if (id === 'stationOverlay') currentOrderSessionId = null; 
-    document.getElementById(id).classList.remove('show'); 
-    if (id === 'stationOverlay') {
-        activeStationId = null;
-        sessionSegmentsCache = {};
-        endingSessionInProgress = false;
-        refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
-    }
-    if (id === 'transferOverlay') {
-        transferSourceStationId = null;
-    }
-}
-function t(ar, en) { return currentLang === 'ar' ? ar : en; }
 
-function applyPermissions() {
-    const isOwner = currentUser.type === 'owner';
-    const perms = currentUser.permissions || {};
-    const navSettings = document.querySelector('.bottom-nav .nav-btn[data-view="view-settings"]');
-    const navShift = document.querySelector('.bottom-nav .nav-btn[data-view="view-shift"]');
-    const navStations = document.querySelector('.bottom-nav .nav-btn[data-view="view-stations"]');
-    const fab = document.getElementById('fabAddExpense');
-    if (navSettings) navSettings.style.display = (isOwner || perms.settings) ? 'flex' : 'none';
-    if (navShift) navShift.style.display = (isOwner || perms.shift) ? 'flex' : 'none';
-    if (navStations) navStations.style.display = (isOwner || perms.stations) ? 'flex' : 'none';
-    if (fab) fab.style.display = (isOwner || perms.shift) ? 'flex' : 'none';
+    updateUIByPermissions();
+
+    if (viewId === 'view-dashboard') renderDashboard();
+    if (viewId === 'view-tables') renderTables();
+    if (viewId === 'view-kitchen') renderKitchenOrders();
+    if (viewId === 'view-menu') { renderMenuView(); renderMenuManagement(); }
+    if (viewId === 'view-settings') renderSettings();
+    if (viewId === 'view-qr') generateQRCodePage();
+    if (viewId === 'view-shift-history') renderShiftHistoryPage(shiftFilter);
+}
+
+function getDeviceId() {
+    let id = localStorage.getItem('platepro_device_id');
+    if (!id) {
+        id = 'dev_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        localStorage.setItem('platepro_device_id', id);
+    }
+    return id;
+}
+
+function money(n) {
+    return (Number(n) || 0).toLocaleString('ar-EG', { maximumFractionDigits: 2 });
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
 }
 
 // ============================================================
-// SETUP / ACTIVATION / LOCK FLOW
+// HAMBURGER MENU
+// ============================================================
+function toggleHamburgerMenu() {
+    const dropdown = document.getElementById('hamburgerDropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('show');
+    if (isOpen) {
+        closeHamburgerMenu();
+        return;
+    }
+
+    // نحسب مكان الزر على الشاشة الفعلية ونمنع القائمة من الخروج برا حدود الشاشة
+    const btn = document.querySelector('.hamburger-btn');
+    if (btn) {
+        const rect = btn.getBoundingClientRect();
+        const margin = 10;
+        const dropdownWidth = Math.min(200, window.innerWidth - margin * 2);
+
+        let left = rect.left;
+        // منع الخروج من الجهة اليمين
+        if (left + dropdownWidth > window.innerWidth - margin) {
+            left = window.innerWidth - margin - dropdownWidth;
+        }
+        // منع الخروج من الجهة الشمال
+        if (left < margin) {
+            left = margin;
+        }
+
+        let top = rect.bottom + 6;
+        if (top + 250 > window.innerHeight) {
+            top = Math.max(margin, rect.top - 6 - 250);
+        }
+
+        dropdown.style.left = left + 'px';
+        dropdown.style.top = top + 'px';
+    }
+
+    dropdown.classList.add('show');
+}
+
+function closeHamburgerMenu() {
+    const dropdown = document.getElementById('hamburgerDropdown');
+    if (dropdown) {
+        dropdown.classList.remove('show');
+    }
+}
+
+window.addEventListener('resize', closeHamburgerMenu);
+
+document.addEventListener('click', function(e) {
+    const menu = document.querySelector('.hamburger-menu');
+    if (menu && !menu.contains(e.target)) {
+        closeHamburgerMenu();
+    }
+});
+
+// ============================================================
+// RING NOTIFICATION
+// ============================================================
+let audioContext = null;
+let ringTimeout = null;
+
+function initAudio() {
+    try {
+        audioContext = new(window.AudioContext || window.webkitAudioContext)();
+        console.log('🎵 Audio initialized');
+    } catch (e) {
+        console.warn('⚠️ Audio not supported');
+    }
+}
+
+function playRingSound(type = 'new_order') {
+    try {
+        if (!audioContext) { initAudio(); }
+        if (!audioContext) return;
+        if (audioContext.state === 'suspended') { audioContext.resume(); }
+
+        const now = audioContext.currentTime;
+
+        if (type === 'new_order') {
+            const frequencies = [800, 1000, 1200, 1000, 800];
+            const durations = [0.15, 0.15, 0.15, 0.15, 0.2];
+            let time = now;
+            frequencies.forEach((freq, i) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                osc.connect(gain);
+                gain.connect(audioContext.destination);
+                osc.frequency.setValueAtTime(freq, time);
+                gain.gain.setValueAtTime(0.25, time);
+                gain.gain.exponentialRampToValueAtTime(0.001, time + durations[i]);
+                osc.start(time);
+                osc.stop(time + durations[i]);
+                time += durations[i] + 0.05;
+            });
+            if (navigator.vibrate) { navigator.vibrate([200, 100, 200, 100, 200]); }
+        } else if (type === 'order_ready') {
+            const osc1 = audioContext.createOscillator();
+            const gain1 = audioContext.createGain();
+            osc1.connect(gain1);
+            gain1.connect(audioContext.destination);
+            osc1.frequency.setValueAtTime(1000, now);
+            osc1.frequency.setValueAtTime(1200, now + 0.1);
+            osc1.frequency.setValueAtTime(1000, now + 0.2);
+            gain1.gain.setValueAtTime(0.3, now);
+            gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+            osc1.start(now);
+            osc1.stop(now + 0.3);
+
+            setTimeout(() => {
+                if (!audioContext) return;
+                const now2 = audioContext.currentTime;
+                const osc2 = audioContext.createOscillator();
+                const gain2 = audioContext.createGain();
+                osc2.connect(gain2);
+                gain2.connect(audioContext.destination);
+                osc2.frequency.setValueAtTime(1200, now2);
+                osc2.frequency.setValueAtTime(1500, now2 + 0.1);
+                osc2.frequency.setValueAtTime(1200, now2 + 0.2);
+                gain2.gain.setValueAtTime(0.3, now2);
+                gain2.gain.exponentialRampToValueAtTime(0.001, now2 + 0.3);
+                osc2.start(now2);
+                osc2.stop(now2 + 0.3);
+            }, 400);
+            if (navigator.vibrate) { navigator.vibrate([300, 150, 300]); }
+        }
+    } catch (e) {
+        console.warn('⚠️ Could not play sound:', e);
+    }
+}
+
+function showRingNotification(title, message, type = 'new_order') {
+    playRingSound(type);
+    const el = document.getElementById('ringNotification');
+    if (!el) {
+        showToast(`🔔 ${title}: ${message}`, 'info');
+        return;
+    }
+    document.getElementById('ringTitle').textContent = title;
+    document.getElementById('ringSub').textContent = message;
+    el.classList.add('show');
+    clearTimeout(ringTimeout);
+    ringTimeout = setTimeout(() => { el.classList.remove('show'); }, 5000);
+    el.onclick = function() { el.classList.remove('show');
+        clearTimeout(ringTimeout); };
+}
+
+// ============================================================
+// PERMISSIONS
+// ============================================================
+function hasPermission(perm) {
+    if (!currentUser) return false;
+    if (currentUser.type === 'owner') return true;
+
+    if (currentUser.role === 'chef') {
+        const chefPerms = ['orders', 'kitchen'];
+        return chefPerms.includes(perm);
+    }
+    if (currentUser.role === 'waiter') {
+        const waiterPerms = ['orders', 'tables', 'create_orders', 'print_receipt'];
+        return waiterPerms.includes(perm);
+    }
+    if (currentUser.role === 'cashier') {
+        const cashierPerms = ['dashboard', 'tables', 'orders', 'payment', 'add_expense', 'print_receipt', 'view_revenue', 'view_expenses'];
+        return cashierPerms.includes(perm) || (currentUser.permissions && currentUser.permissions[perm] === true);
+    }
+
+    return currentUser.permissions && currentUser.permissions[perm] === true;
+}
+
+function updateUIByPermissions() {
+    const expenseBtn = document.getElementById('dashExpenseBtn');
+    const closeShiftBtn = document.getElementById('dashCloseShiftBtn');
+    const revenueCard = document.querySelector('.stat-card.revenue');
+
+    if (expenseBtn) expenseBtn.style.display = hasPermission('add_expense') ? 'flex' : 'none';
+    if (closeShiftBtn) closeShiftBtn.style.display = hasPermission('close_shift') ? 'flex' : 'none';
+
+    if (revenueCard) {
+        const canViewRevenue = hasPermission('view_revenue') || currentUser?.type === 'owner';
+        revenueCard.style.display = canViewRevenue ? 'block' : 'none';
+    }
+
+    const menuManageBtns = document.querySelectorAll('#view-menu .btn-primary, #view-menu .btn-outline');
+    menuManageBtns.forEach(btn => {
+        btn.style.display = hasPermission('manage_menu') ? 'inline-flex' : 'none';
+    });
+
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+        const view = btn.dataset.view;
+        const viewMap = {
+            'view-dashboard': 'dashboard',
+            'view-tables': 'tables',
+            'view-kitchen': 'orders',
+            'view-menu': 'menu',
+            'view-settings': 'settings'
+        };
+        const permKey = viewMap[view];
+        if (permKey) {
+            btn.style.display = hasPermission(permKey) ? 'flex' : 'none';
+        }
+    });
+
+    const qrBtn = document.querySelector('[onclick*="view-qr"]');
+    if (qrBtn) {
+        qrBtn.style.display = hasPermission('dashboard') ? 'flex' : 'none';
+    }
+}
+
+async function openNewShift() {
+    shiftManuallyClosed = false;
+    await loadOrOpenShift();
+    updateShiftIndicator();
+    renderDashboard();
+    renderSettings();
+    if (currentShift && !currentShift.id.toString().startsWith('temp_')) {
+        showToast('✅ تم فتح شيفت جديد', 'success');
+    }
+}
+
+// ============================================================
+// SHIFT INDICATOR
+// ============================================================
+function updateShiftIndicator() {
+    const indicator = document.getElementById('shiftIndicator');
+    const label = document.getElementById('shiftStatusLabel');
+    const closeShiftBtn = document.getElementById('dashCloseShiftBtn');
+
+    if (currentShift && currentShift.status === 'open') {
+        if (indicator) {
+            indicator.className = 'shift-indicator';
+            label.textContent = t('shift_open');
+            label.style.color = 'var(--success)';
+            const time = new Date(currentShift.opened_at).toLocaleTimeString();
+            indicator.title = `فتح في: ${time}`;
+        }
+        if (closeShiftBtn) {
+            closeShiftBtn.className = 'btn btn-danger btn-block';
+            closeShiftBtn.innerHTML = `<i class="fa-solid fa-lock"></i> <span data-i18n="close_shift">${t('close_shift')}</span>`;
+            closeShiftBtn.onclick = openCloseShiftSheet;
+        }
+    } else {
+        if (indicator) {
+            indicator.className = 'shift-indicator closed';
+            label.textContent = t('shift_closed');
+            label.style.color = 'var(--danger)';
+        }
+        if (closeShiftBtn) {
+            closeShiftBtn.className = 'btn btn-primary btn-block';
+            closeShiftBtn.innerHTML = `<i class="fa-solid fa-unlock"></i> <span data-i18n="open_new_shift">${t('open_new_shift')}</span>`;
+            closeShiftBtn.onclick = openNewShift;
+        }
+    }
+}
+
+// ============================================================
+// QR CODE
+// ============================================================
+function generateQRCodePage() {
+    if (!business) {
+        showToast('⚠️ لا يوجد نشاط تجاري', 'error');
+        return;
+    }
+    const bizId = business.id;
+    const baseUrl = window.location.origin + window.location.pathname;
+    const customerUrl = baseUrl + '?customer=true&biz=' + bizId;
+    const qrApiUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(customerUrl);
+    document.getElementById('qrCodeImagePage').src = qrApiUrl;
+    qrGenerated = true;
+    localStorage.setItem('platepro_customer_url', customerUrl);
+    localStorage.setItem('platepro_business_id', bizId);
+    showToast(t('qr_generated'), 'success');
+}
+
+function downloadQRPage() {
+    const link = document.createElement('a');
+    link.download = 'QR_' + (business ? business.code : 'cafe') + '.png';
+    link.href = document.getElementById('qrCodeImagePage').src;
+    link.click();
+}
+
+// ============================================================
+// REALTIME SYNC
+// ============================================================
+function getTableLabel(tableId) {
+    const table = tables.find(t => t.id === tableId);
+    return table ? table.number : '?';
+}
+
+function startRealtimeSync() {
+    if (!supabaseClient || !business) {
+        console.warn('⚠️ Cannot start realtime sync: missing client or business');
+        return;
+    }
+
+    if (realtimeSubscription) {
+        realtimeSubscription.unsubscribe();
+        realtimeSubscription = null;
+    }
+
+    console.log('🔄 Starting realtime sync for orders...');
+
+    realtimeSubscription = supabaseClient
+        .channel('orders-changes')
+        .on(
+            'postgres_changes',
+            {
+                event: '*',
+                schema: 'public',
+                table: 'orders',
+                filter: `business_id=eq.${business.id}`
+            },
+            async (payload) => {
+                console.log('📡 Realtime update received:', payload);
+                
+                const { eventType, new: newRecord, old: oldRecord } = payload;
+                
+                if (eventType === 'INSERT') {
+                    orders[newRecord.id] = newRecord;
+                    if (!orderStatus[newRecord.id]) {
+                        orderStatus[newRecord.id] = newRecord.status || 'pending';
+                    }
+                    showRingNotification(
+                        '🔔 طلب جديد!',
+                        `طاولة ${getTableLabel(newRecord.table_id)} - ${newRecord.status || 'جديد'}`,
+                        'new_order'
+                    );
+                } else if (eventType === 'UPDATE') {
+                    if (orders[oldRecord.id]) {
+                        const oldStatus = oldRecord.status;
+                        const newStatus = newRecord.status;
+                        if (oldStatus !== newStatus) {
+                            if (newStatus === 'ready') {
+                                showRingNotification(
+                                    '🛎️ طلب جاهز للتسليم!',
+                                    `طاولة ${getTableLabel(newRecord.table_id)} - انتظر الويتر`,
+                                    'order_ready'
+                                );
+                            }
+                        }
+                        orders[newRecord.id] = newRecord;
+                        orderStatus[newRecord.id] = newRecord.status || 'pending';
+                    }
+                } else if (eventType === 'DELETE') {
+                    delete orders[oldRecord.id];
+                    delete orderStatus[oldRecord.id];
+                }
+                
+                renderDashboard();
+                renderTables();
+                renderKitchenOrders();
+            }
+        )
+        .subscribe((status) => {
+            console.log('📡 Realtime subscription status:', status);
+        });
+
+    supabaseClient
+        .channel('tables-changes')
+        .on(
+            'postgres_changes',
+            {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'tables',
+                filter: `business_id=eq.${business.id}`
+            },
+            async (payload) => {
+                console.log('📡 Table update received:', payload);
+                await loadTables();
+                renderTables();
+                renderDashboard();
+            }
+        )
+        .subscribe();
+}
+
+function stopRealtimeSync() {
+    if (realtimeSubscription) {
+        realtimeSubscription.unsubscribe();
+        realtimeSubscription = null;
+        console.log('🔄 Realtime sync stopped');
+    }
+}
+
+// ============================================================
+// CUSTOMER PAGE
+// ============================================================
+function initCustomerPage() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('customer') === 'true') {
+        document.getElementById('setupScreen').classList.remove('active');
+        document.getElementById('mainApp').classList.remove('active');
+        document.getElementById('customerPage').classList.add('active');
+        loadCustomerData();
+    }
+}
+
+async function loadCustomerData() {
+    const params = new URLSearchParams(window.location.search);
+    let bizId = params.get('biz');
+    
+    if (!bizId) {
+        bizId = localStorage.getItem('platepro_business_id');
+    }
+    
+    if (!bizId) {
+        document.getElementById('customerBizName').textContent = '❌ مطعم غير موجود';
+        document.getElementById('customerMenuItems').innerHTML = `
+            <div class="empty" style="padding:40px 16px;">
+                <i class="fa-solid fa-triangle-exclamation" style="font-size:40px;color:var(--danger);"></i>
+                <div style="font-size:16px; font-weight:700; margin-top:8px;">رابط غير صحيح</div>
+                <div style="font-size:13px; color:var(--text-muted);">تأكد من الرابط المستخدم</div>
+            </div>
+        `;
+        return;
+    }
+
+    customerBusinessId = bizId;
+
+    if (!supabaseClient) {
+        document.getElementById('customerBizName').textContent = '⚠️ خطأ في الاتصال';
+        document.getElementById('customerMenuItems').innerHTML = `
+            <div class="empty" style="padding:40px 16px;">
+                <i class="fa-solid fa-wifi" style="font-size:40px;color:var(--warning);"></i>
+                <div style="font-size:16px; font-weight:700; margin-top:8px;">خطأ في الاتصال</div>
+                <div style="font-size:13px; color:var(--text-muted);">تأكد من اتصال الإنترنت</div>
+            </div>
+        `;
+        return;
+    }
+
+    try {
+        const { data: biz, error: bizError } = await supabaseClient
+            .from('businesses')
+            .select('*')
+            .eq('id', bizId)
+            .maybeSingle();
+
+        if (bizError || !biz) {
+            document.getElementById('customerBizName').textContent = '❌ مطعم غير موجود';
+            document.getElementById('customerMenuItems').innerHTML = `
+                <div class="empty" style="padding:40px 16px;">
+                    <i class="fa-solid fa-store-slash" style="font-size:40px;color:var(--danger);"></i>
+                    <div style="font-size:16px; font-weight:700; margin-top:8px;">المطعم غير موجود</div>
+                    <div style="font-size:13px; color:var(--text-muted);">تأكد من الكود المستخدم</div>
+                </div>
+            `;
+            return;
+        }
+
+        customerBusiness = biz;
+        document.getElementById('customerBizName').textContent = biz.name;
+        document.title = biz.name + ' - Menu';
+
+        const savedLogo = localStorage.getItem('platepro_logo');
+        if (savedLogo) {
+            const logoContainer = document.getElementById('customerLogoContainer');
+            logoContainer.innerHTML = `<img src="${savedLogo}" class="logo-img" alt="Logo">`;
+        }
+
+        const [itemsRes, catsRes] = await Promise.all([
+            supabaseClient.from('menu_items')
+                .select('*')
+                .eq('business_id', bizId)
+                .eq('is_active', true)
+                .order('sort_order'),
+            supabaseClient.from('menu_categories')
+                .select('*')
+                .eq('business_id', bizId)
+                .eq('is_active', true)
+                .order('sort_order')
+        ]);
+
+        customerMenuItems = itemsRes.data || [];
+        customerCategories = catsRes.data || [];
+
+        await renderCustomerTables();
+        renderCustomerCategories();
+        renderCustomerItems();
+        loadFeesSettings();
+
+        console.log('✅ Customer data loaded successfully');
+
+    } catch (e) {
+        console.error('Error loading customer data:', e);
+        document.getElementById('customerBizName').textContent = '⚠️ خطأ في التحميل';
+        document.getElementById('customerMenuItems').innerHTML = `
+            <div class="empty" style="padding:40px 16px;">
+                <i class="fa-solid fa-circle-exclamation" style="font-size:40px;color:var(--danger);"></i>
+                <div style="font-size:16px; font-weight:700; margin-top:8px;">⚠️ حدث خطأ</div>
+                <div style="font-size:13px; color:var(--text-muted);">حاول تحديث الصفحة</div>
+            </div>
+        `;
+    }
+}
+
+async function renderCustomerTables() {
+    if (!customerBusiness) return;
+    const bizId = customerBusiness.id;
+    try {
+        const { data: tablesData } = await supabaseClient
+            .from('tables')
+            .select('*')
+            .eq('business_id', bizId)
+            .order('number');
+
+        const tableSelect = document.getElementById('customerTableSelect');
+        if (tablesData && tablesData.length > 0) {
+            const availableTables = tablesData.filter(t => t.status === 'available');
+            if (availableTables.length > 0) {
+                tableSelect.innerHTML = `<option value="">-- اختر طاولة --</option>
+                            ${availableTables.map(t => `<option value="${t.id}">طاولة ${t.number} (${t.capacity || 4} أشخاص)</option>`).join('')}`;
+            } else {
+                tableSelect.innerHTML = `<option value="">⚠️ مفيش طاولات متاحة حالياً</option>`;
+            }
+        } else {
+            tableSelect.innerHTML = `<option value="">⚠️ مفيش طاولات متاحة حالياً</option>`;
+        }
+    } catch (e) {
+        console.error('Error loading tables:', e);
+    }
+}
+
+function renderCustomerCategories() {
+    const container = document.getElementById('customerCategories');
+    if (!container) return;
+    container.innerHTML = `<button class="btn active" onclick="filterCustomerItems('all')">${t('all')}</button>
+                ${customerCategories.map(cat => `<button class="btn" onclick="filterCustomerItems('${cat.id}')"><i class="fa-solid ${cat.icon || 'fa-utensils'}"></i> ${escapeHtml(cat.name)}</button>`).join('')}`;
+}
+
+function filterCustomerItems(categoryId) {
+    currentCustomerFilter = categoryId;
+    document.querySelectorAll('#customerCategories .btn').forEach(btn => btn.classList.remove('active'));
+    const btns = document.querySelectorAll('#customerCategories .btn');
+    const idx = categoryId === 'all' ? 0 : customerCategories.findIndex(c => c.id === categoryId) + 1;
+    if (btns[idx]) btns[idx].classList.add('active');
+    renderCustomerItems(categoryId);
+}
+
+function renderCustomerItems(categoryId) {
+    const container = document.getElementById('customerMenuItems');
+    if (!container) return;
+    let items = customerMenuItems;
+    if (categoryId && categoryId !== 'all') {
+        items = items.filter(item => item.category_id === categoryId);
+    }
+    if (!items || items.length === 0) {
+        container.innerHTML = `<div class="empty" style="padding:40px 16px;"><i class="fa-solid fa-utensils" style="font-size:40px;"></i><div style="font-size:16px; font-weight:700; margin-top:8px;">${t('no_items')}</div><div style="font-size:13px; color:var(--text-muted);">جاري تحديث المنيو</div></div>`;
+        return;
+    }
+    container.innerHTML = items.map(item => {
+        let imageHtml = '🍽️';
+        if (item.image_url) {
+            imageHtml = `<img src="${item.image_url}" alt="${escapeHtml(item.name)}" onerror="this.style.display='none';this.parentElement.innerHTML='🍽️'">`;
+        }
+        return `<div class="customer-menu-card">
+                        <div class="item-image">${imageHtml}</div>
+                        <div class="item-info">
+                            <div class="item-name">${escapeHtml(item.name)}</div>
+                            ${item.description ? `<div class="item-desc">${escapeHtml(item.description)}</div>` : ''}
+                            <div class="item-price">${money(item.price)} ج.م</div>
+                        </div>
+                        <div class="item-actions">
+                            <button class="btn btn-primary btn-xs" onclick="addToCustomerCart('${item.id}')"><i class="fa-solid fa-plus"></i></button>
+                        </div>
+                    </div>`;
+    }).join('');
+}
+
+// ============================================================
+// CUSTOMER CART
+// ============================================================
+function addToCustomerCart(itemId) {
+    const item = customerMenuItems.find(i => i.id === itemId);
+    if (!item) return;
+    const existing = customerCart.find(i => i.id === itemId);
+    if (existing) { existing.quantity += 1; } else { customerCart.push({ ...item, quantity: 1 }); }
+    updateCustomerCartUI();
+    showCustomerToast('✅ تم إضافة ' + item.name);
+}
+
+function updateCustomerCartUI() {
+    const cart = document.getElementById('customerCart');
+    const count = customerCart.reduce((sum, i) => sum + i.quantity, 0);
+    const subtotal = customerCart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    const serviceFee = subtotal * (serviceFeePercent / 100);
+    const vat = (subtotal + serviceFee) * (vatPercent / 100);
+    const total = subtotal + serviceFee + vat;
+
+    document.getElementById('cartCount').textContent = count;
+    document.getElementById('cartTotal').textContent = money(total);
+    if (cart) cart.style.display = count > 0 ? 'block' : 'none';
+}
+
+function showCustomerCart() {
+    const container = document.getElementById('customerCartItems');
+    if (customerCart.length === 0) {
+        container.innerHTML = `<div class="empty">${t('empty_cart')}</div>`;
+        document.getElementById('customerCartTotal').textContent = '0';
+        openSheet('customerCartOverlay');
+        return;
+    }
+    container.innerHTML = customerCart.map((item, index) =>
+        `<div class="order-item">
+                        <div>
+                            <div class="item-name">${escapeHtml(item.name)}</div>
+                            <div class="item-details">${item.quantity} × ${money(item.price)}
+                                <button class="btn btn-xs" style="background:var(--danger);color:#fff;border:none;border-radius:4px;cursor:pointer;margin-right:8px;" onclick="removeFromCustomerCart(${index})"><i class="fa-solid fa-minus"></i></button>
+                            </div>
+                        </div>
+                        <div class="item-price">${money(item.price * item.quantity)}</div>
+                    </div>`
+    ).join('');
+
+    const subtotal = customerCart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+    const serviceFee = subtotal * (serviceFeePercent / 100);
+    const vat = (subtotal + serviceFee) * (vatPercent / 100);
+    const total = subtotal + serviceFee + vat;
+
+    document.getElementById('cartSubtotal').textContent = money(subtotal);
+    document.getElementById('serviceFeePercent').textContent = serviceFeePercent;
+    document.getElementById('cartServiceFee').textContent = money(serviceFee);
+    document.getElementById('vatPercent').textContent = vatPercent;
+    document.getElementById('cartVat').textContent = money(vat);
+    document.getElementById('customerCartTotal').textContent = money(total);
+
+    openSheet('customerCartOverlay');
+}
+
+function removeFromCustomerCart(index) {
+    customerCart.splice(index, 1);
+    updateCustomerCartUI();
+    showCustomerCart();
+}
+
+function showCustomerToast(msg) {
+    const el = document.getElementById('customerToast');
+    el.textContent = msg;
+    el.className = 'toast success';
+    el.style.display = 'block';
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.display = 'none'; }, 2000);
+}
+
+// ============================================================
+// SUBMIT CUSTOMER ORDER
+// ============================================================
+async function submitCustomerOrder() {
+    if (customerCart.length === 0) {
+        document.getElementById('customerCartError').textContent = t('error_no_items');
+        return;
+    }
+    const tableSelect = document.getElementById('customerTableSelect');
+    const tableId = tableSelect.value;
+    if (!tableId) {
+        document.getElementById('customerCartError').textContent = '⚠️ اختر رقم الطاولة أولاً';
+        return;
+    }
+    if (!customerBusiness) {
+        document.getElementById('customerCartError').textContent = t('error_general');
+        return;
+    }
+
+    try {
+        const { data: tableData } = await supabaseClient
+            .from('tables')
+            .select('*')
+            .eq('id', tableId)
+            .single();
+
+        if (!tableData || tableData.status !== 'available') {
+            document.getElementById('customerCartError').textContent = '⚠️ الطاولة أصبحت مشغولة، اختر طاولة أخرى';
+            loadCustomerData();
+            return;
+        }
+
+        await supabaseClient.from('tables').update({ status: 'occupied' }).eq('id', tableId);
+
+        const subtotal = customerCart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+        const serviceFee = subtotal * (serviceFeePercent / 100);
+        const vat = (subtotal + serviceFee) * (vatPercent / 100);
+        const total = subtotal + serviceFee + vat;
+
+        const { data: order, error } = await supabaseClient.from('orders').insert({
+            business_id: customerBusiness.id,
+            table_id: tableId,
+            order_type: 'dine_in',
+            status: 'pending',
+            subtotal: subtotal,
+            total: total,
+            notes: '📱 طلب من العميل عبر QR\n' +
+                'رسوم الخدمة: ' + money(serviceFee) + '\n' +
+                'ضريبة القيمة المضافة: ' + money(vat)
+        }).select().single();
+
+        if (error) throw error;
+
+        const orderItems = customerCart.map(item => ({
+            order_id: order.id,
+            menu_item_id: item.id,
+            quantity: item.quantity,
+            unit_price: item.price,
+            total: item.price * item.quantity,
+            status: 'pending'
+        }));
+
+        await supabaseClient.from('order_items').insert(orderItems);
+
+        customerCart = [];
+        updateCustomerCartUI();
+        closeSheet('customerCartOverlay');
+        showCustomerToast(t('order_created'));
+        document.getElementById('customerCartError').textContent = '';
+        await loadCustomerData();
+        localStorage.setItem('platepro_need_refresh', 'true');
+        localStorage.setItem('platepro_last_order_time', Date.now().toString());
+
+    } catch (e) {
+        console.error('Error submitting order:', e);
+        document.getElementById('customerCartError').textContent = t('error_general');
+    }
+}
+
+// ============================================================
+// SETUP / ACTIVATION / LOCK
 // ============================================================
 async function handleSetupContinue() {
     const code = document.getElementById('setupBusinessCode').value.trim().toUpperCase();
     const errEl = document.getElementById('setupError');
     errEl.textContent = '';
-    if (!code) { errEl.textContent = t('اكتب كود النشاط.', 'Enter the business code.'); return; }
+    if (!code) { errEl.textContent = t('error_invalid_code'); return; }
+
     const btn = document.getElementById('setupContinueBtn');
     btn.disabled = true;
+
     try {
+        if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
         const { data: biz, error } = await supabaseClient.from('businesses').select('*').eq('code', code).single();
-        if (error || !biz) { errEl.textContent = t('مفيش نشاط بالكود ده.', 'No business found with this code.'); return; }
+        if (error || !biz) { errEl.textContent = t('error_invalid_code'); return; }
         business = biz;
-        localStorage.setItem('psr_business_code', code);
+        localStorage.setItem('platepro_business_code', code);
+
+        loadLogo();
 
         const deviceId = getDeviceId();
         const { data: dev } = await supabaseClient.from('devices').select('*').eq('business_id', biz.id).eq('device_id', deviceId).maybeSingle();
+
         if (!dev) {
             document.getElementById('activationBizName').textContent = biz.name;
             showScreen('activationScreen');
@@ -248,7 +1550,7 @@ async function handleSetupContinue() {
         proceedToLock();
     } catch (e) {
         console.error(e);
-        errEl.textContent = t('حصل خطأ في الاتصال، حاول تاني.', 'Connection error, please try again.');
+        errEl.textContent = t('error_connection');
     } finally { btn.disabled = false; }
 }
 
@@ -256,36 +1558,51 @@ async function handleActivateDevice() {
     const code = document.getElementById('activationCodeInput').value.trim().toUpperCase();
     const errEl = document.getElementById('activationError');
     errEl.textContent = '';
-    if (!code) { errEl.textContent = t('اكتب كود التفعيل.', 'Enter the activation code.'); return; }
+    if (!code) { errEl.textContent = t('error_general'); return; }
+
     try {
+        if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
         const { data: actCode, error } = await supabaseClient.from('activation_codes').select('*').eq('business_id', business.id).eq('code', code).eq('used', false).single();
-        if (error || !actCode) { errEl.textContent = t('الكود غير صحيح أو مستخدم قبل كده.', 'Invalid or already used code.'); return; }
+        if (error || !actCode) { errEl.textContent = 'الكود غير صحيح أو مستخدم قبل كده.'; return; }
 
         const deviceId = getDeviceId();
-        const isTrial = actCode.is_trial === true;
-        const expiry = new Date(); expiry.setDate(expiry.getDate() + (isTrial ? 7 : 30));
+        const expiry = new Date();
+        expiry.setDate(expiry.getDate() + 30);
         const { data: newDev, error: devErr } = await supabaseClient.from('devices').insert({
-            business_id: business.id, device_id: deviceId,
-            device_label: isTrial ? t('جهاز — تجربة مجانية', 'Device — Free trial') : t('جهاز بدون اسم', 'Unnamed device'),
-            is_active: true, revoked: false, expiry_date: expiry.toISOString()
+            business_id: business.id,
+            device_id: deviceId,
+            device_label: 'جهاز جديد',
+            is_active: true,
+            revoked: false,
+            expiry_date: expiry.toISOString()
         }).select().single();
-        if (devErr) { errEl.textContent = t('فشل التفعيل، حاول تاني.', 'Activation failed, try again.'); return; }
+
+        if (devErr) { errEl.textContent = t('error_general'); return; }
 
         await supabaseClient.from('activation_codes').update({ used: true, used_at: new Date().toISOString() }).eq('id', actCode.id);
         deviceRecord = newDev;
-        showToast(t('تم تفعيل الجهاز بنجاح', 'Device activated successfully'), 'success');
+        showToast(t('device_activated'), 'success');
         proceedToLock();
-    } catch (e) { console.error(e); errEl.textContent = t('حصل خطأ، حاول تاني.', 'Error, try again.'); }
+    } catch (e) {
+        console.error(e);
+        errEl.textContent = t('error_connection');
+    }
 }
 
 function proceedToLock() {
     document.getElementById('lockBizCode').textContent = business.code;
     document.getElementById('lockBizName').textContent = business.name;
+
     const expiry = deviceRecord.expiry_date ? new Date(deviceRecord.expiry_date) : null;
     const subLine = document.getElementById('subStatusLine');
-    if (deviceRecord.revoked || !deviceRecord.is_active) { subLine.textContent = t('الجهاز موقوف — تواصل مع الإدارة', 'Device suspended — contact admin'); }
-    else if (expiry && expiry < new Date()) { subLine.textContent = t('الاشتراك منتهي — تواصل مع الإدارة', 'Subscription expired — contact admin'); }
-    else if (expiry) { const days = Math.ceil((expiry - new Date()) / 86400000); subLine.textContent = t(`متبقي ${days} يوم على الاشتراك`, `${days} days remaining on subscription`); }
+    if (deviceRecord.revoked || !deviceRecord.is_active) {
+        subLine.textContent = 'الجهاز موقوف — تواصل مع الإدارة';
+    } else if (expiry && expiry < new Date()) {
+        subLine.textContent = 'الاشتراك منتهي — تواصل مع الإدارة';
+    } else if (expiry) {
+        const days = Math.ceil((expiry - new Date()) / 86400000);
+        subLine.textContent = `متبقي ${days} يوم على الاشتراك`;
+    }
     resetLockRole();
     showScreen('lockScreen');
 }
@@ -312,66 +1629,2526 @@ async function handleEmployeeUnlock() {
     const pin = document.getElementById('lockEmpPin').value.trim();
     const errEl = document.getElementById('lockError');
     errEl.textContent = '';
-    if (deviceRecord.revoked || !deviceRecord.is_active) { errEl.textContent = t('الجهاز موقوف.', 'Device suspended.'); return; }
-    if (deviceRecord.expiry_date && new Date(deviceRecord.expiry_date) < new Date()) { errEl.textContent = t('الاشتراك منتهي.', 'Subscription expired.'); return; }
-    if (!name || !pin) { errEl.textContent = t('اكتب الاسم والـ PIN.', 'Enter your name and PIN.'); return; }
 
-    const { data: emps, error } = await supabaseClient.from('employees').select('*').eq('business_id', business.id).eq('active', true);
-    if (error) { errEl.textContent = t('حصل خطأ، حاول تاني.', 'Error, try again.'); console.error('Error loading employees for login:', error); return; }
+    if (deviceRecord.revoked || !deviceRecord.is_active) { errEl.textContent = t('error_general'); return; }
+    if (deviceRecord.expiry_date && new Date(deviceRecord.expiry_date) < new Date()) { errEl.textContent = 'الاشتراك منتهي.'; return; }
+    if (!name || !pin) { errEl.textContent = t('error_general'); return; }
+
+    if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
+    const { data: emps, error } = await supabaseClient.from('employees').select('*').eq('business_id', business.id).eq('is_active', true);
+    if (error) { errEl.textContent = t('error_general'); return; }
+
     const emp = (emps || []).find(e => e.name && e.name.trim().toLowerCase() === name.toLowerCase() && String(e.pin) === pin);
     if (emp) {
         currentUser = { type: 'employee', ...emp };
-        document.getElementById('lockEmpName').value = '';
-        document.getElementById('lockEmpPin').value = '';
         enterMainApp();
         return;
     }
-    errEl.textContent = t('الاسم أو الـ PIN غير صحيح.', 'Incorrect name or PIN.');
+    errEl.textContent = t('error_invalid_pin');
 }
 
 async function handleUnlock() {
     const pin = document.getElementById('lockPinInput').value.trim();
     const errEl = document.getElementById('lockError');
     errEl.textContent = '';
-    if (deviceRecord.revoked || !deviceRecord.is_active) { errEl.textContent = t('الجهاز موقوف.', 'Device suspended.'); return; }
-    if (deviceRecord.expiry_date && new Date(deviceRecord.expiry_date) < new Date()) { errEl.textContent = t('الاشتراك منتهي.', 'Subscription expired.'); return; }
-    if (!pin) { errEl.textContent = t('اكتب الـ PIN.', 'Enter the PIN.'); return; }
+
+    if (deviceRecord.revoked || !deviceRecord.is_active) { errEl.textContent = t('error_general'); return; }
+    if (deviceRecord.expiry_date && new Date(deviceRecord.expiry_date) < new Date()) { errEl.textContent = 'الاشتراك منتهي.'; return; }
+    if (!pin) { errEl.textContent = t('error_general'); return; }
 
     if (pin === business.owner_pin) {
-        currentUser = { type: 'owner', name: t('المالك', 'Owner'), permissions: { stations: true, inventory: true, shift: true, settings: true } };
-        document.getElementById('lockPinInput').value = '';
+        currentUser = { type: 'owner', name: 'المالك' };
         enterMainApp();
         return;
     }
-    const { data: emp } = await supabaseClient.from('employees').select('*').eq('business_id', business.id).eq('pin', pin).eq('active', true).maybeSingle();
+
+    if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
+    const { data: emp } = await supabaseClient.from('employees').select('*').eq('business_id', business.id).eq('pin', pin).eq('is_active', true).maybeSingle();
     if (emp) {
         currentUser = { type: 'employee', ...emp };
-        document.getElementById('lockPinInput').value = '';
         enterMainApp();
         return;
     }
-    errEl.textContent = t('PIN غير صحيح.', 'Incorrect PIN.');
+    errEl.textContent = t('error_invalid_pin');
 }
 
 function lockApp() {
-    stopRealtimeAndTimers();
     currentUser = null;
+    stopRealtimeSync();
     document.getElementById('lockPinInput').value = '';
     proceedToLock();
 }
 
+// ============================================================
+// MAIN APP
+// ============================================================
+async function enterMainApp() {
+    document.getElementById('headerBizName').textContent = business.name;
+    document.getElementById('headerBizCode').textContent = business.code;
+    showScreen('mainApp');
+
+    loadTheme();
+    loadFeesSettings();
+    loadLogo();
+    await loadAllData();
+
+    await loadOrOpenShift();
+
+    startRealtimeSync();
+
+    document.getElementById('dashBizName').textContent = business.name;
+    updateLogoUI();
+
+    if (currentUser.type === 'owner') {
+        currentUser.permissions = {
+            dashboard: true, tables: true, orders: true, menu: true, settings: true,
+            create_orders: true, add_expense: true, close_shift: true, print_receipt: true,
+            manage_menu: true, view_revenue: true, view_expenses: true
+        };
+    }
+
+    updateUIByPermissions();
+    applyTranslations();
+    renderDashboard();
+    renderTables();
+    renderKitchenOrders();
+    renderMenuView();
+    renderMenuManagement();
+    renderSettings();
+    updateShiftIndicator();
+
+    setInterval(async () => {
+        if (!shiftManuallyClosed && (!currentShift || currentShift.status !== 'open')) {
+            await loadOrOpenShift();
+        }
+        updateShiftIndicator();
+    }, 10000);
+
+    startAutoRefresh();
+}
+
+// ============================================================
+// SHIFT MANAGEMENT
+// ============================================================
+async function loadOrOpenShift() {
+    if (!supabaseClient || !business) {
+        console.warn('⚠️ Cannot load shift: missing client or business');
+        return null;
+    }
+
+    try {
+        let { data: shift, error } = await supabaseClient
+            .from('shifts')
+            .select('*')
+            .eq('business_id', business.id)
+            .eq('status', 'open')
+            .maybeSingle();
+
+        if (error) {
+            console.error('Error fetching shift:', error);
+        }
+
+        if (!shift) {
+            console.log('🔄 No open shift found, creating new one...');
+            try {
+                const { data: newShift, error: createError } = await supabaseClient
+                    .from('shifts')
+                    .insert({
+                        business_id: business.id,
+                        opened_at: new Date().toISOString(),
+                        status: 'open',
+                        total_revenue: 0,
+                        total_expenses: 0,
+                        total_profit: 0,
+                        opened_by: currentUser?.name || 'نظام'
+                    })
+                    .select()
+                    .single();
+
+                if (!createError && newShift) {
+                    shift = newShift;
+                    console.log(`✅ New shift opened for business: ${business.name}`);
+                    showToast('✅ تم فتح شيفت جديد', 'success');
+                } else {
+                    console.error('Error creating shift:', createError);
+                }
+            } catch (e) {
+                console.error('Error in shift creation:', e);
+            }
+        } else {
+            console.log(`✅ Shift already open since: ${new Date(shift.opened_at).toLocaleString()}`);
+        }
+
+        if (shift) {
+            currentShift = shift;
+            shiftManuallyClosed = false;
+            updateShiftIndicator();
+            return shift;
+        } else {
+            currentShift = {
+                id: 'temp_' + Date.now(),
+                business_id: business.id,
+                status: 'open',
+                opened_at: new Date().toISOString(),
+                opened_by: currentUser?.name || 'نظام',
+                total_revenue: 0,
+                total_expenses: 0,
+                total_profit: 0
+            };
+            console.log('⚠️ Using temporary shift in memory');
+            updateShiftIndicator();
+            return currentShift;
+        }
+
+    } catch (e) {
+        console.error('Error in loadOrOpenShift:', e);
+        currentShift = {
+            id: 'temp_' + Date.now(),
+            business_id: business.id,
+            status: 'open',
+            opened_at: new Date().toISOString(),
+            opened_by: currentUser?.name || 'نظام',
+            total_revenue: 0,
+            total_expenses: 0,
+            total_profit: 0
+        };
+        updateShiftIndicator();
+        return currentShift;
+    }
+}
+
+async function closeShift() {
+    if (!supabaseClient || !currentShift) {
+        showToast('⚠️ لا يوجد شيفت مفتوح', 'warning');
+        return null;
+    }
+
+    if (!hasPermission('close_shift') && currentUser?.type !== 'owner') {
+        showToast(t('error_permission'), 'error');
+        return null;
+    }
+
+    if (currentShift.id && currentShift.id.toString().startsWith('temp_')) {
+        showToast('⚠️ هذا شيفت مؤقت، سيتم إنشاء شيفت جديد تلقائياً', 'warning');
+        currentShift = null;
+        shiftManuallyClosed = true;
+        updateShiftIndicator();
+        return { revenue: 0, totalExpenses: 0, profit: 0 };
+    }
+
+    try {
+        const { data: completedOrders, error: ordersError } = await supabaseClient
+            .from('orders')
+            .select('total')
+            .eq('business_id', business.id)
+            .eq('status', 'paid')
+            .gte('created_at', currentShift.opened_at);
+
+        if (ordersError) throw ordersError;
+
+        const revenue = (completedOrders || []).reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+
+        const { data: expenses, error: expensesError } = await supabaseClient
+            .from('expenses')
+            .select('amount')
+            .eq('shift_id', currentShift.id);
+
+        if (expensesError) throw expensesError;
+
+        const totalExpenses = (expenses || []).reduce((sum, e) => sum + Number(e.amount), 0);
+
+        const profit = revenue - totalExpenses;
+
+        const { error: updateError } = await supabaseClient
+            .from('shifts')
+            .update({
+                status: 'closed',
+                closed_at: new Date().toISOString(),
+                closed_by: currentUser?.name || 'نظام',
+                total_revenue: revenue,
+                total_expenses: totalExpenses,
+                total_profit: profit
+            })
+            .eq('id', currentShift.id);
+
+        if (updateError) throw updateError;
+
+        showToast(`✅ تم إقفال الشيفت - الإيراد: ${money(revenue)}`, 'success');
+        currentShift = null;
+        shiftManuallyClosed = true;
+        updateShiftIndicator();
+        renderDashboard();
+        renderSettings();
+
+        return { revenue, totalExpenses, profit };
+
+    } catch (e) {
+        console.error('Error closing shift:', e);
+        showToast(t('shift_close_failed'), 'error');
+        throw e;
+    }
+}
+
+async function openCloseShiftSheet() {
+    if (!hasPermission('close_shift') && currentUser?.type !== 'owner') {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+
+    if (!currentShift) {
+        await loadOrOpenShift();
+        if (!currentShift) {
+            showToast(t('no_open_shift'), 'warning');
+            return;
+        }
+    }
+
+    if (!supabaseClient) return;
+
+    try {
+        const { data: completedOrders } = await supabaseClient
+            .from('orders')
+            .select('total')
+            .eq('business_id', business.id)
+            .eq('status', 'paid')
+            .gte('created_at', currentShift.opened_at);
+
+        const revenue = (completedOrders || []).reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+
+        const { data: expenses } = await supabaseClient
+            .from('expenses')
+            .select('amount')
+            .eq('shift_id', currentShift.id);
+
+        const totalExpenses = (expenses || []).reduce((sum, e) => sum + Number(e.amount), 0);
+
+        const profit = revenue - totalExpenses;
+
+        document.getElementById('closeShiftSummary').innerHTML = `
+            <div class="list-row">
+                <div class="row-title">📅 تاريخ الفتح</div>
+                <div class="row-value mono">${new Date(currentShift.opened_at).toLocaleString()}</div>
+            </div>
+            <div class="list-row">
+                <div class="row-title">👤 فتح بواسطة</div>
+                <div class="row-value mono">${currentShift.opened_by || 'نظام'}</div>
+            </div>
+            <div class="list-row">
+                <div class="row-title">📋 الطلبات المدفوعة</div>
+                <div class="row-value mono">${completedOrders?.length || 0}</div>
+            </div>
+            <div class="list-row">
+                <div class="row-title">${t('shift_revenue')}</div>
+                <div class="row-value mono" style="color:var(--success);">${money(revenue)}</div>
+            </div>
+            <div class="list-row">
+                <div class="row-title">${t('shift_expenses')}</div>
+                <div class="row-value mono" style="color:var(--danger);">${money(totalExpenses)}</div>
+            </div>
+            <div class="list-row" style="border-bottom: 2px solid var(--primary); padding-bottom: 12px;">
+                <div class="row-title" style="font-size:16px; font-weight:800;">${t('shift_profit')}</div>
+                <div class="row-value mono" style="font-size:18px; color:var(--primary-dark);">${money(profit)}</div>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:8px; text-align:center;">
+                ⚠️ تأكد من تحصيل جميع المدفوعات قبل الإقفال
+            </div>
+        `;
+
+        document.getElementById('confirmCloseShiftBtn').onclick = async function() {
+            const btn = this;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإقفال...';
+            
+            try {
+                await closeShift();
+                closeSheet('closeShiftOverlay');
+                renderDashboard();
+                renderSettings();
+                updateShiftIndicator();
+            } catch (e) {
+                showToast(t('shift_close_failed'), 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span data-i18n="confirm_close">تأكيد الإقفال</span>';
+            }
+        };
+
+        openSheet('closeShiftOverlay');
+    } catch (e) {
+        console.error('Error in openCloseShiftSheet:', e);
+        showToast(t('error_general'), 'error');
+    }
+}
+
+// ============================================================
+// SHIFT HISTORY - سجل الشيفتات (صفحة منفصلة)
+// ============================================================
+async function renderShiftHistoryPage(filter = 'daily') {
+    const container = document.getElementById('shiftHistoryListPage');
+    if (!container) return;
+    
+    if (!supabaseClient || !business) {
+        container.innerHTML = `<div class="empty">${t('loading')}</div>`;
+        return;
+    }
+    
+    try {
+        let startDate;
+        const now = new Date();
+        
+        if (filter === 'daily') {
+            startDate = new Date(now);
+            startDate.setHours(0, 0, 0, 0);
+        } else if (filter === 'weekly') {
+            startDate = new Date(now);
+            startDate.setDate(now.getDate() - 7);
+        } else if (filter === 'monthly') {
+            startDate = new Date(now);
+            startDate.setMonth(now.getMonth() - 1);
+        }
+        
+        const { data: shifts, error } = await supabaseClient
+            .from('shifts')
+            .select('*')
+            .eq('business_id', business.id)
+            .eq('status', 'closed')
+            .gte('closed_at', startDate.toISOString())
+            .order('closed_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        if (!shifts || shifts.length === 0) {
+            container.innerHTML = `<div class="empty"><i class="fa-solid fa-clock"></i> لا توجد شيفتات ${filter === 'daily' ? 'اليوم' : filter === 'weekly' ? 'هذا الأسبوع' : 'هذا الشهر'}</div>`;
+            return;
+        }
+        
+        container.innerHTML = shifts.map(shift => `
+            <div class="shift-card" onclick="viewShiftDetail('${shift.id}')">
+                <div class="shift-card-header">
+                    <div class="shift-card-date">${new Date(shift.closed_at).toLocaleDateString('ar-EG')}</div>
+                    <span class="badge badge-gold">${new Date(shift.closed_at).toLocaleTimeString('ar-EG')}</span>
+                </div>
+                <div class="shift-card-stats">
+                    <span>💰 <span class="revenue">${money(shift.total_revenue || 0)}</span></span>
+                    <span>📈 ${money(shift.total_profit || 0)}</span>
+                    <span>👤 ${shift.closed_by || 'نظام'}</span>
+                </div>
+            </div>
+        `).join('');
+        
+    } catch (e) {
+        console.error('Error loading shift history:', e);
+        container.innerHTML = `<div class="empty">⚠️ حدث خطأ في تحميل السجل</div>`;
+    }
+}
+
+function filterShiftHistory(filter) {
+    shiftFilter = filter;
+    document.querySelectorAll('#shiftFilterTabs .btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    renderShiftHistoryPage(filter);
+}
+
+// ============================================================
+// SHIFT DETAIL - تفاصيل الشيفت
+// ============================================================
+async function viewShiftDetail(shiftId) {
+    if (!supabaseClient || !business) return;
+    
+    try {
+        // جلب بيانات الشيفت
+        const { data: shift, error: shiftError } = await supabaseClient
+            .from('shifts')
+            .select('*')
+            .eq('id', shiftId)
+            .single();
+        
+        if (shiftError) throw shiftError;
+        
+        // جلب الطلبات في هذا الشيفت
+        const { data: ordersData, error: ordersError } = await supabaseClient
+            .from('orders')
+            .select('*, order_items(*, menu_items(*))')
+            .eq('business_id', business.id)
+            .gte('created_at', shift.opened_at)
+            .lte('created_at', shift.closed_at || new Date().toISOString())
+            .order('created_at', { ascending: true });
+        
+        if (ordersError) throw ordersError;
+        
+        // عرض تفاصيل الشيفت
+        document.getElementById('shiftDetailDate').textContent = new Date(shift.closed_at).toLocaleDateString('ar-EG');
+        document.getElementById('shiftDetailMeta').textContent = 
+            `🕐 ${new Date(shift.opened_at).toLocaleTimeString('ar-EG')} - ${new Date(shift.closed_at).toLocaleTimeString('ar-EG')} · 👤 ${shift.closed_by || 'نظام'}`;
+        
+        document.getElementById('detailRevenue').textContent = money(shift.total_revenue || 0);
+        document.getElementById('detailOrders').textContent = ordersData?.length || 0;
+        
+        // حساب عدد الطاولات المستخدمة
+        const uniqueTables = new Set(ordersData?.map(o => o.table_id) || []);
+        document.getElementById('detailTables').textContent = uniqueTables.size || 0;
+        
+        // عرض الطلبات
+        const ordersContainer = document.getElementById('shiftDetailOrders');
+        
+        if (!ordersData || ordersData.length === 0) {
+            ordersContainer.innerHTML = `<div class="empty">لا توجد طلبات في هذا الشيفت</div>`;
+        } else {
+            // تجميع الطلبات حسب الطاولة
+            const tableOrders = {};
+            ordersData.forEach(order => {
+                if (!tableOrders[order.table_id]) {
+                    tableOrders[order.table_id] = [];
+                }
+                tableOrders[order.table_id].push(order);
+            });
+            
+            // جلب بيانات الطاولات
+            const tableIds = Object.keys(tableOrders);
+            const { data: tablesData } = await supabaseClient
+                .from('tables')
+                .select('*')
+                .in('id', tableIds);
+            
+            const tableMap = {};
+            (tablesData || []).forEach(t => { tableMap[t.id] = t; });
+            
+            // عرض الطاولات مع طلباتها
+            ordersContainer.innerHTML = Object.entries(tableOrders).map(([tableId, orders]) => {
+                const table = tableMap[tableId];
+                const tableNumber = table?.number || '?';
+                const totalForTable = orders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+                
+                // تجميع الطلبات حسب الوقت (كل ساعة)
+                const timeGroups = {};
+                orders.forEach(order => {
+                    const hour = new Date(order.created_at).getHours();
+                    const timeKey = `${hour}:00 - ${hour + 1}:00`;
+                    if (!timeGroups[timeKey]) {
+                        timeGroups[timeKey] = [];
+                    }
+                    timeGroups[timeKey].push(order);
+                });
+                
+                let timeHtml = '';
+                Object.entries(timeGroups).forEach(([timeKey, timeOrders]) => {
+                    const items = timeOrders.map(o => {
+                        const orderItems = o.order_items || [];
+                        return orderItems.map(item => 
+                            `${item.quantity}× ${item.menu_items?.name || 'صنف'}`
+                        ).join('، ');
+                    }).join(' | ');
+                    
+                    timeHtml += `
+                        <div style="background:var(--bg-input); border-radius:var(--radius-sm); padding:8px 12px; margin-bottom:6px;">
+                            <div style="display:flex; justify-content:space-between; font-size:13px;">
+                                <span style="font-weight:700;">🕐 ${timeKey}</span>
+                                <span style="color:var(--text-muted);">${timeOrders.length} طلبات</span>
+                            </div>
+                            <div style="font-size:12px; color:var(--text-secondary); margin-top:2px;">
+                                ${items || 'لا توجد تفاصيل'}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                return `
+                    <div class="table-order-item">
+                        <div class="order-header">
+                            <div>
+                                <div class="order-table">🪑 طاولة ${tableNumber}</div>
+                                <div class="order-time">${orders.length} طلبات · ${money(totalForTable)}</div>
+                            </div>
+                            <div class="order-total">${money(totalForTable)}</div>
+                        </div>
+                        <div style="margin-top:8px;">
+                            ${timeHtml}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        navigateTo('view-shift-detail');
+        
+    } catch (e) {
+        console.error('Error loading shift detail:', e);
+        showToast('⚠️ حدث خطأ في تحميل التفاصيل', 'error');
+    }
+}
+
+// ============================================================
+// AUTO REFRESH
+// ============================================================
+let refreshInterval = null;
+
+function startAutoRefresh() {
+    if (refreshInterval) clearInterval(refreshInterval);
+    refreshInterval = setInterval(async () => {
+        const needRefresh = localStorage.getItem('platepro_need_refresh');
+        if (needRefresh === 'true') {
+            console.log('🔄 New order detected, refreshing data...');
+            try {
+                await loadActiveOrders();
+                await loadTables();
+                renderTables();
+                renderKitchenOrders();
+                renderDashboard();
+                localStorage.removeItem('platepro_need_refresh');
+                showToast('📱 طلب جديد من العميل!', 'info');
+            } catch (e) {
+                console.error('Error refreshing data:', e);
+            }
+        }
+    }, 3000);
+}
+
+// ============================================================
+// LOAD ALL DATA
+// ============================================================
+async function loadAllData() {
+    await loadTables();
+    await loadActiveOrders();
+    await Promise.all([
+        loadMenuItems(),
+        loadMenuCategories(),
+        loadEmployees(),
+        loadPaymentMethods()
+    ]);
+}
+
+// ============================================================
+// DATA LOADERS
+// ============================================================
+async function loadTables() {
+    if (!supabaseClient || !business) return;
+    let { data } = await supabaseClient.from('tables').select('*').eq('business_id', business.id).order('number');
+    if (!data || data.length === 0) {
+        const seed = Array.from({ length: 8 }, (_, i) => ({
+            business_id: business.id,
+            number: i + 1,
+            capacity: 4,
+            status: 'available'
+        }));
+        const { data: created } = await supabaseClient.from('tables').insert(seed).select();
+        data = created || [];
+    }
+    tables = data;
+}
+
+async function loadMenuItems() {
+    if (!supabaseClient || !business) return;
+    const { data } = await supabaseClient.from('menu_items').select('*').eq('business_id', business.id).eq('is_active', true).order('sort_order');
+    menuItems = data || [];
+}
+
+async function loadMenuCategories() {
+    if (!supabaseClient || !business) return;
+    const { data } = await supabaseClient.from('menu_categories').select('*').eq('business_id', business.id).eq('is_active', true).order('sort_order');
+    menuCategories = data || [];
+}
+
+async function loadEmployees() {
+    if (!supabaseClient || !business) return;
+    const { data } = await supabaseClient.from('employees').select('*').eq('business_id', business.id).order('created_at');
+    employees = data || [];
+}
+
+async function loadPaymentMethods() {
+    if (!supabaseClient || !business) return;
+    const { data } = await supabaseClient.from('payment_methods').select('*').eq('business_id', business.id).eq('is_active', true);
+    if (data && data.length > 0) {
+        paymentMethods = data;
+        return;
+    }
+    const defaults = [
+        { business_id: business.id, name: 'كاش', icon: 'fa-money-bill-wave', color: 'badge-success' },
+        { business_id: business.id, name: 'بطاقة ائتمان', icon: 'fa-credit-card', color: 'badge-gold' },
+        { business_id: business.id, name: 'محفظة إلكترونية', icon: 'fa-wallet', color: 'badge-info' }
+    ];
+    const { data: created } = await supabaseClient.from('payment_methods').insert(defaults).select();
+    paymentMethods = created || defaults;
+}
+
+async function loadActiveOrders() {
+    if (!supabaseClient || !business) return;
+    const { data } = await supabaseClient
+        .from('orders')
+        .select('*')
+        .eq('business_id', business.id)
+        .in('status', ['pending', 'preparing', 'ready', 'paid'])
+        .order('created_at', { ascending: false });
+
+    orders = {};
+    (data || []).forEach(order => {
+        orders[order.id] = order;
+        if (!orderStatus[order.id]) {
+            orderStatus[order.id] = order.status || 'pending';
+        }
+    });
+    return data || [];
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+async function renderDashboard() {
+    const activeOrders = Object.values(orders).filter(o => o.status !== 'completed' && o.status !== 'cancelled' && o.status !== 'paid');
+    const occupiedTables = tables.filter(t => t.status === 'occupied' || t.status === 'ready_to_serve');
+    const availableTables = tables.filter(t => t.status === 'available');
+
+    let revenue = 0;
+    let totalExpenses = 0;
+    let expensesList = [];
+
+    if (supabaseClient && currentShift && !currentShift.id.toString().startsWith('temp_')) {
+        const { data: completedOrders, error: revenueError } = await supabaseClient
+            .from('orders')
+            .select('total')
+            .eq('business_id', business.id)
+            .eq('status', 'paid')
+            .gte('created_at', currentShift.opened_at);
+
+        if (revenueError) {
+            console.error('❌ Error loading revenue:', revenueError.message || revenueError);
+        } else {
+            revenue = (completedOrders || []).reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+        }
+
+        const { data: expenses, error: expensesError } = await supabaseClient
+            .from('expenses')
+            .select('description, amount, created_at')
+            .eq('shift_id', currentShift.id)
+            .order('created_at', { ascending: false });
+
+        if (expensesError) {
+            console.error('❌ Error loading expenses:', expensesError.message || expensesError);
+        } else {
+            expensesList = expenses || [];
+            totalExpenses = expensesList.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        }
+    } else if (currentShift && currentShift.id.toString().startsWith('temp_')) {
+        console.warn('⚠️ الشيفت لسه مش متسجل في قاعدة البيانات (temp shift) - الإيراد والمصروفات مش هتتحسب لحد ما يتحل سبب فشل فتح الشيفت في Supabase.');
+    }
+
+    const canViewRevenue = hasPermission('view_revenue') || currentUser?.type === 'owner';
+    const revenueCard = document.querySelector('.stat-card.revenue');
+    if (revenueCard) {
+        revenueCard.style.display = canViewRevenue ? 'block' : 'none';
+    }
+
+    const canViewExpenses = hasPermission('view_expenses') || currentUser?.type === 'owner';
+    const expensesCard = document.getElementById('dashExpensesCard');
+    const expensesListEl = document.getElementById('dashExpensesList');
+    if (expensesCard) {
+        expensesCard.style.display = canViewExpenses ? 'block' : 'none';
+    }
+    if (expensesListEl) {
+        const expensesSectionTitle = expensesListEl.previousElementSibling;
+        if (!canViewExpenses) {
+            expensesListEl.style.display = 'none';
+            if (expensesSectionTitle) expensesSectionTitle.style.display = 'none';
+        } else {
+            expensesListEl.style.display = 'block';
+            if (expensesSectionTitle) expensesSectionTitle.style.display = 'block';
+            expensesListEl.innerHTML = expensesList.length
+                ? expensesList.map(e => `
+                    <div class="list-row">
+                        <div class="row-title">${escapeHtml(e.description || '-')}</div>
+                        <div class="row-value mono" style="color:var(--danger);">${money(Number(e.amount) || 0)}</div>
+                    </div>
+                `).join('')
+                : `<div class="empty" style="padding:12px;">${t('no_expenses')}</div>`;
+        }
+    }
+
+    document.getElementById('dashRevenue').textContent = money(revenue);
+    document.getElementById('dashExpenses').textContent = money(totalExpenses);
+    document.getElementById('dashActiveOrders').textContent = activeOrders.length;
+    document.getElementById('dashOccupiedTables').textContent = occupiedTables.length;
+    document.getElementById('dashAvailableTables').textContent = availableTables.length;
+}
+
+// ============================================================
+// TABLES
+// ============================================================
+async function renderTables() {
+    const grid = document.getElementById('tablesGrid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    for (const table of tables) {
+        try {
+            const activeOrder = Object.values(orders).find(o =>
+                o.table_id === table.id &&
+                o.status !== 'completed' &&
+                o.status !== 'cancelled' &&
+                o.status !== 'paid'
+            );
+
+            let finalStatus = table.status;
+
+            if (activeOrder) {
+                if (activeOrder.status === 'ready') {
+                    finalStatus = 'ready_to_serve';
+                } else {
+                    finalStatus = 'occupied';
+                }
+                if (table.status !== finalStatus) {
+                    await supabaseClient.from('tables').update({ status: finalStatus }).eq('id', table.id);
+                    table.status = finalStatus;
+                }
+            } else if (table.status === 'occupied' || table.status === 'ready_to_serve') {
+                finalStatus = 'available';
+                await supabaseClient.from('tables').update({ status: 'available' }).eq('id', table.id);
+                table.status = 'available';
+            } else if (table.status === 'reserved') {
+                finalStatus = 'reserved';
+            }
+
+            const statusMap = {
+                available: { label: t('available'), class: 'available' },
+                occupied: { label: t('occupied'), class: 'occupied' },
+                reserved: { label: t('reserved'), class: 'reserved' },
+                ready_to_serve: { label: t('ready_to_serve'), class: 'ready_to_serve' }
+            };
+
+            const s = statusMap[finalStatus] || statusMap.available;
+
+            const card = document.createElement('div');
+            card.className = `table-card ${s.class}`;
+            card.onclick = () => openTableSheet(table.id);
+
+            const badge = finalStatus !== 'available' ?
+                `<span class="table-badge ${finalStatus === 'ready_to_serve' ? 'badge-ready-table' : ''}">${s.label}</span>` :
+                '';
+
+            card.innerHTML = `${badge}<div class="table-num">${table.number}</div><div class="table-status">${s.label}</div><div class="table-capacity">${table.capacity || 4} ${t('persons')}</div>`;
+            grid.appendChild(card);
+        } catch (error) {
+            console.error('Error rendering table:', error);
+        }
+    }
+}
+
+// ============================================================
+// KITCHEN
+// ============================================================
+function renderKitchenOrders() {
+    const isChef = currentUser?.role === 'chef' || currentUser?.type === 'owner' || hasPermission('orders');
+
+    if (!isChef) {
+        document.getElementById('kitchenOrdersList').innerHTML = `<div class="empty"><i class="fa-solid fa-lock"></i>${t('error_permission')}</div>`;
+        return;
+    }
+
+    const kitchenOrders = Object.values(orders).filter(o =>
+        o.status === 'pending' || o.status === 'preparing'
+    );
+
+    const el = document.getElementById('kitchenOrdersList');
+
+    if (kitchenOrders.length === 0) {
+        el.innerHTML = `<div class="empty"><i class="fa-solid fa-utensils"></i>${t('no_kitchen_orders')}</div>`;
+        return;
+    }
+
+    el.innerHTML = kitchenOrders.map(order => {
+        const table = tables.find(t => t.id === order.table_id);
+        const orderItems = order.order_items || [];
+        const itemCount = orderItems.reduce((sum, i) => sum + (i.quantity || 0), 0);
+
+        let itemsPreview = '';
+        if (orderItems.length > 0) {
+            itemsPreview = orderItems.slice(0, 3).map(item =>
+                `${item.quantity}× ${item.menu_items?.name || t('default_item')}`
+            ).join('، ');
+            if (orderItems.length > 3) {
+                itemsPreview += ` +${orderItems.length - 3} ${t('more')}`;
+            }
+        }
+
+        const statusLabelMap = {
+            pending: t('pending'),
+            preparing: t('preparing')
+        };
+
+        return `<div class="list-row" onclick="viewKitchenOrder('${order.id}')" style="cursor:pointer; border-bottom:2px solid var(--border); padding:14px 4px;">
+                            <div>
+                                <div class="row-title" style="font-size:16px;">${t('table')} ${table?.number || '?'}</div>
+                                <div class="row-sub">${itemCount} ${t('items')} · ${itemsPreview}</div>
+                            </div>
+                            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+                                <span class="badge ${order.status === 'pending' ? 'badge-warning' : 'badge-info'}">${statusLabelMap[order.status] || order.status}</span>
+                                <span style="font-size:11px; color:var(--text-muted);">${new Date(order.created_at).toLocaleTimeString()}</span>
+                            </div>
+                        </div>`;
+    }).join('');
+}
+
+// ============================================================
+// VIEW KITCHEN ORDER
+// ============================================================
+async function viewKitchenOrder(orderId) {
+    window._activeKitchenOrderId = orderId;
+    const order = Object.values(orders).find(o => o.id === orderId);
+    if (!order) return;
+
+    const { data: items } = await supabaseClient
+        .from('order_items')
+        .select('*, menu_items(*)')
+        .eq('order_id', orderId);
+
+    const table = tables.find(t => t.id === order.table_id);
+    const body = document.getElementById('kitchenOrderBody');
+
+    let itemsHtml = '';
+    if (items && items.length > 0) {
+        itemsHtml = items.map(item =>
+            `<div class="order-item" style="padding:8px 0;">
+                                <div>
+                                    <div class="item-name" style="font-size:16px;">${escapeHtml(item.menu_items?.name || t('default_item'))}</div>
+                                    <div class="item-details" style="font-size:14px; color:var(--text-secondary);">${item.quantity} ×</div>
+                                </div>
+                            </div>`
+        ).join('');
+    }
+
+    let actionButtons = '';
+    if (order.status === 'pending') {
+        actionButtons = `<button class="btn btn-primary btn-block" onclick="startPreparing('${orderId}')"><i class="fa-solid fa-utensils"></i> ${t('start_preparing')}</button>`;
+    } else if (order.status === 'preparing') {
+        actionButtons = `<button class="btn btn-success btn-block" onclick="markAsReady('${orderId}')"><i class="fa-solid fa-check"></i> ${t('ready_for_delivery')}</button>`;
+    }
+
+    body.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:12px;">
+                            <span class="badge badge-gold" style="font-size:14px;">${t('table')} ${table?.number || '?'}</span>
+                            <span class="badge ${order.status === 'pending' ? 'badge-warning' : 'badge-info'}" style="font-size:14px;">${order.status === 'pending' ? t('pending') : t('preparing')}</span>
+                        </div>
+                        <div style="background:var(--bg-input);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">${itemsHtml}</div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            ${actionButtons}
+                            <button class="btn btn-ghost" style="flex:1;" onclick="closeSheet('kitchenOrderOverlay')">${t('close')}</button>
+                        </div>`;
+
+    openSheet('kitchenOrderOverlay');
+}
+
+// ============================================================
+// ORDER WORKFLOW
+// ============================================================
+async function startPreparing(orderId) {
+    if (currentUser?.role !== 'chef' && currentUser?.type !== 'owner' && !hasPermission('orders')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    try {
+        await supabaseClient.from('orders').update({ status: 'preparing' }).eq('id', orderId);
+        orderStatus[orderId] = 'preparing';
+        showToast(t('preparing_started'), 'info');
+        await loadActiveOrders();
+        renderKitchenOrders();
+        renderTables();
+        renderDashboard();
+        closeSheet('kitchenOrderOverlay');
+    } catch (e) {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+async function markAsReady(orderId) {
+    if (currentUser?.role !== 'chef' && currentUser?.type !== 'owner' && !hasPermission('orders')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    try {
+        await supabaseClient.from('orders').update({ status: 'ready' }).eq('id', orderId);
+        orderStatus[orderId] = 'ready';
+
+        const order = Object.values(orders).find(o => o.id === orderId);
+        const table = tables.find(t => t.id === order?.table_id);
+        
+        // ✅ فقط إشعار نصي للشيف
+        showToast(`✅ تم تجهيز طلب طاولة ${table?.number || '?'}`, 'success');
+
+        await loadActiveOrders();
+        renderKitchenOrders();
+        renderTables();
+        renderDashboard();
+        closeSheet('kitchenOrderOverlay');
+
+    } catch (e) {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+// ============================================================
+// TABLE SHEET
+// ============================================================
+function openTableSheet(tableId) {
+    window._activeTableId = tableId;
+    const table = tables.find(t => t.id === tableId);
+    if (!table) return;
+
+    const activeOrder = Object.values(orders).find(o =>
+        o.table_id === tableId &&
+        o.status !== 'completed' &&
+        o.status !== 'cancelled' &&
+        o.status !== 'paid'
+    );
+
+    if (!activeOrder) {
+        if (!hasPermission('create_orders')) {
+            showToast(t('error_permission'), 'error');
+            return;
+        }
+
+        if (table.status === 'occupied' || table.status === 'ready_to_serve') {
+            supabaseClient.from('tables').update({ status: 'available' }).eq('id', tableId).catch(() => {});
+            table.status = 'available';
+        }
+
+        document.getElementById('tableSheetTitle').textContent = `${t('table')} ${table.number} (${table.capacity || 4} ${t('persons')})`;
+        const body = document.getElementById('tableSheetBody');
+
+        body.innerHTML = `<div class="section-title">${t('menu')}</div>
+                            <div class="menu-quick-add" id="menuItemsForTable">
+                                ${menuItems.length === 0 ? '<div class="empty" style="padding:10px;">' + t('no_items') + '</div>' : ''}
+                            </div>
+                            <div id="tableOrderItems"></div>
+                            <div style="display:flex;gap:8px;margin-top:12px;">
+                                <button class="btn btn-primary" style="flex:1;" onclick="createOrder('${tableId}')"><i class="fa-solid fa-check"></i> ${t('confirm_order')}</button>
+                                <button class="btn btn-ghost" style="flex:1;" onclick="closeSheet('tableOverlay')">${t('cancel')}</button>
+                            </div>
+                            <div class="error-text" id="tableSheetError"></div>`;
+
+        const menuContainer = document.getElementById('menuItemsForTable');
+        if (menuItems.length > 0) {
+            menuItems.slice(0, 12).forEach(item => {
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-outline btn-sm';
+                btn.innerHTML = `${escapeHtml(item.name)} ${money(item.price)}`;
+                btn.onclick = () => addItemToOrder(item);
+                menuContainer.appendChild(btn);
+            });
+        }
+
+        _orderItems = [];
+        renderTableOrderItems();
+        openSheet('tableOverlay');
+        return;
+    }
+
+    const status = orderStatus[activeOrder.id] || activeOrder.status || 'pending';
+    const isReady = status === 'ready';
+    const isPaid = status === 'paid';
+
+    const subtotal = activeOrder.subtotal || activeOrder.total || 0;
+    const serviceFee = subtotal * (serviceFeePercent / 100);
+    const vat = (subtotal + serviceFee) * (vatPercent / 100);
+    const total = subtotal + serviceFee + vat;
+
+    let actionButtons = '';
+    const isCashier = currentUser?.role === 'cashier' || currentUser?.type === 'owner' || hasPermission('payment');
+
+    if (isReady && !isPaid && isCashier) {
+        if (hasPermission('print_receipt')) {
+            actionButtons = `<button class="btn btn-success" style="flex:1;" onclick="printReceipt('${activeOrder.id}')"><i class="fa-solid fa-print"></i> ${t('print_receipt')}</button>
+                                    <button class="btn btn-primary" style="flex:1;" onclick="showPaymentSheet('${activeOrder.id}')"><i class="fa-solid fa-credit-card"></i> ${t('payment')}</button>`;
+        } else {
+            actionButtons = `<button class="btn btn-ghost" style="flex:1;" disabled><i class="fa-solid fa-print"></i> ${t('error_permission')}</button>
+                                    <button class="btn btn-primary" style="flex:1;" onclick="showPaymentSheet('${activeOrder.id}')"><i class="fa-solid fa-credit-card"></i> ${t('payment')}</button>`;
+        }
+    } else if (isPaid) {
+        actionButtons = `<button class="btn btn-success" style="flex:1;" disabled><i class="fa-solid fa-check"></i> ${t('paid')}</button>`;
+    } else if (!isReady && !isPaid) {
+        if (currentUser?.role === 'chef' || currentUser?.type === 'owner' || hasPermission('orders')) {
+            actionButtons = `<button class="btn btn-primary" style="flex:1;" onclick="startPreparing('${activeOrder.id}')"><i class="fa-solid fa-utensils"></i> ${t('start_preparing')}</button>`;
+        } else {
+            actionButtons = `<button class="btn btn-ghost" style="flex:1;" disabled><i class="fa-solid fa-clock"></i> ${t('pending')}</button>`;
+        }
+    }
+
+    const statusBadgeMap = {
+        pending: 'badge-warning',
+        preparing: 'badge-info',
+        ready: 'badge-ready-table',
+        paid: 'badge-paid',
+        cancelled: 'badge-cancelled'
+    };
+    const statusLabelMap = {
+        pending: t('pending'),
+        preparing: t('preparing'),
+        ready: t('ready_to_serve'),
+        paid: t('paid'),
+        cancelled: t('cancelled')
+    };
+
+    document.getElementById('tableSheetTitle').textContent = `${t('table')} ${table.number} (${table.capacity || 4} ${t('persons')})`;
+    const body = document.getElementById('tableSheetBody');
+
+    body.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:12px;">
+                            <span class="badge badge-gold">${t('order')} #${activeOrder.id.slice(0, 8)}</span>
+                            <span class="badge ${statusBadgeMap[status] || 'badge-warning'}">${statusLabelMap[status] || status}</span>
+                        </div>
+                        <div id="orderItemsList"><div class="empty" style="padding:10px;">${t('loading')}</div></div>
+                        
+                        <div style="background:var(--bg-input);border-radius:var(--radius-sm);padding:10px 14px;margin:8px 0;">
+                            <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:var(--text-secondary);">
+                                <span>${t('subtotal')}</span>
+                                <span>${money(subtotal)}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:var(--text-secondary);">
+                                <span>${t('service_fee')} (${serviceFeePercent}%)</span>
+                                <span>${money(serviceFee)}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:var(--text-secondary);">
+                                <span>${t('vat')} (${vatPercent}%)</span>
+                                <span>${money(vat)}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;padding:6px 0 0 0;border-top:2px solid var(--border);font-weight:700;font-size:16px;color:var(--text-primary);">
+                                <span>${t('total')}</span>
+                                <span style="color:var(--primary-dark);">${money(total)}</span>
+                            </div>
+                        </div>
+                        
+                        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+                            ${actionButtons}
+                            <button class="btn btn-ghost" style="flex:1;" onclick="closeSheet('tableOverlay')">${t('back')}</button>
+                        </div>
+                        <div class="error-text" id="tableSheetError"></div>`;
+
+    loadOrderItems(activeOrder.id);
+    openSheet('tableOverlay');
+}
+
+// ============================================================
+// ORDER CREATION
+// ============================================================
+function addItemToOrder(item) {
+    const existing = _orderItems.find(i => i.menu_item_id === item.id);
+    if (existing) {
+        existing.quantity += 1;
+        existing.total = existing.quantity * existing.unit_price;
+    } else {
+        _orderItems.push({
+            menu_item_id: item.id,
+            name: item.name,
+            unit_price: item.price,
+            quantity: 1,
+            total: item.price
+        });
+    }
+    renderTableOrderItems();
+    showToast(t('item_added_to_order', { name: item.name }), 'success');
+}
+
+function renderTableOrderItems() {
+    const container = document.getElementById('tableOrderItems');
+    if (!container) return;
+
+    if (_orderItems.length === 0) {
+        container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:12px;">لم يتم إضافة أي صنف</div>';
+        return;
+    }
+
+    const total = _orderItems.reduce((sum, i) => sum + i.total, 0);
+    container.innerHTML = `${_orderItems.map((item, index) =>
+                    `<div class="order-item">
+                                <div>
+                                    <div class="item-name">${escapeHtml(item.name)}</div>
+                                    <div class="item-details">
+                                        ${item.quantity} × ${money(item.unit_price)}
+                                        <button class="btn btn-xs" style="background:var(--danger);color:#fff;border:none;border-radius:6px;cursor:pointer;margin-right:8px;" onclick="removeTableOrderItem(${index})"><i class="fa-solid fa-minus"></i></button>
+                                        <button class="btn btn-xs" style="background:var(--success);color:#fff;border:none;border-radius:6px;cursor:pointer;margin-right:4px;" onclick="addTableOrderItem(${index})"><i class="fa-solid fa-plus"></i></button>
+                                    </div>
+                                </div>
+                                <div class="item-price">${money(item.total)}</div>
+                            </div>`
+                ).join('')}
+                        <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--border-light);font-weight:700;">
+                            <span>${t('total')}</span>
+                            <span style="color:var(--primary-dark);">${money(total)}</span>
+                        </div>`;
+}
+
+function removeTableOrderItem(index) {
+    const item = _orderItems[index];
+    if (!item) return;
+    if (item.quantity > 1) {
+        item.quantity -= 1;
+        item.total = item.quantity * item.unit_price;
+    } else {
+        _orderItems.splice(index, 1);
+    }
+    renderTableOrderItems();
+}
+
+function addTableOrderItem(index) {
+    const item = _orderItems[index];
+    if (!item) return;
+    item.quantity += 1;
+    item.total = item.quantity * item.unit_price;
+    renderTableOrderItems();
+}
+
+async function createOrder(tableId) {
+    if (_orderItems.length === 0) {
+        document.getElementById('tableSheetError').textContent = t('error_no_items');
+        return;
+    }
+
+    if (!supabaseClient) {
+        document.getElementById('tableSheetError').textContent = t('error_connection');
+        return;
+    }
+
+    const subtotal = _orderItems.reduce((sum, i) => sum + i.total, 0);
+
+    try {
+        const { data: order, error } = await supabaseClient.from('orders').insert({
+            business_id: business.id,
+            table_id: tableId,
+            waiter_id: currentUser?.id || null,
+            order_type: 'dine_in',
+            status: 'pending',
+            subtotal: subtotal,
+            total: subtotal
+        }).select().single();
+
+        if (error) throw error;
+
+        const orderItems = _orderItems.map(item => ({
+            order_id: order.id,
+            menu_item_id: item.menu_item_id,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total: item.total
+        }));
+
+        await supabaseClient.from('order_items').insert(orderItems);
+        await supabaseClient.from('tables').update({ status: 'occupied' }).eq('id', tableId);
+
+        orderStatus[order.id] = 'pending';
+        _orderItems = [];
+        closeSheet('tableOverlay');
+        showToast(t('order_created'), 'success');
+
+        await loadActiveOrders();
+        renderTables();
+        renderKitchenOrders();
+        renderDashboard();
+    } catch (e) {
+        console.error('Error creating order:', e);
+        document.getElementById('tableSheetError').textContent = t('error_general');
+    }
+}
+
+async function loadOrderItems(orderId) {
+    if (!supabaseClient) return;
+    const { data: items } = await supabaseClient
+        .from('order_items')
+        .select('*, menu_items(*)')
+        .eq('order_id', orderId);
+
+    const listEl = document.getElementById('orderItemsList');
+
+    if (!items || items.length === 0) {
+        listEl.innerHTML = '<div class="empty" style="padding:10px;">' + t('no_items') + '</div>';
+        return;
+    }
+
+    listEl.innerHTML = items.map(item =>
+        `<div class="order-item">
+                            <div>
+                                <div class="item-name">${escapeHtml(item.menu_items?.name || t('default_item'))}</div>
+                                <div class="item-details">${item.quantity} × ${money(item.unit_price)}</div>
+                            </div>
+                            <div class="item-price">${money(item.total)}</div>
+                        </div>`
+    ).join('');
+}
+
+function showPaymentSheet(orderId) {
+    const order = Object.values(orders).find(o => o.id === orderId);
+    if (!order) return;
+
+    const subtotal = order.subtotal || order.total || 0;
+    const serviceFee = subtotal * (serviceFeePercent / 100);
+    const vat = (subtotal + serviceFee) * (vatPercent / 100);
+    const total = subtotal + serviceFee + vat;
+
+    const body = document.getElementById('tableSheetBody');
+    body.innerHTML = `<div style="text-align:center;margin:12px 0;">
+                            <div style="font-size:32px;font-weight:900;color:var(--primary-dark);">${money(total)}</div>
+                            <div style="font-size:13px;color:var(--text-muted);">${t('total')}</div>
+                        </div>
+                        <div class="section-title">${t('select_payment')}</div>
+                        <div class="payment-options" id="paymentOptions">
+                            ${paymentMethods.map(pm => `<div class="payment-option" onclick="selectPaymentMethod('${pm.id}')" data-id="${pm.id}"><i class="fa-solid ${pm.icon}"></i><span>${escapeHtml(pm.name)}</span></div>`).join('')}
+                        </div>
+                        <div style="display:flex;gap:8px;margin-top:12px;">
+                            <button class="btn btn-primary" style="flex:1;" id="confirmPaymentBtn" onclick="confirmPaymentAndClose('${orderId}')" disabled><i class="fa-solid fa-check"></i> ${t('payment')}</button>
+                            <button class="btn btn-ghost" style="flex:1;" onclick="closeSheet('tableOverlay')">${t('back')}</button>
+                        </div>
+                        <div class="error-text" id="paymentError"></div>`;
+}
+
+function selectPaymentMethod(pmId) {
+    selectedPaymentMethod = pmId;
+    document.querySelectorAll('.payment-option').forEach(el => {
+        el.classList.toggle('selected', el.dataset.id === pmId);
+    });
+    document.getElementById('confirmPaymentBtn').disabled = false;
+}
+
+async function printReceipt(orderId) {
+    if (!hasPermission('print_receipt')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+
+    const order = Object.values(orders).find(o => o.id === orderId);
+    if (!order) return;
+
+    const subtotal = order.subtotal || order.total || 0;
+    const serviceFee = subtotal * (serviceFeePercent / 100);
+    const vat = (subtotal + serviceFee) * (vatPercent / 100);
+    const total = subtotal + serviceFee + vat;
+
+    const { data: items } = await supabaseClient
+        .from('order_items')
+        .select('*, menu_items(*)')
+        .eq('order_id', orderId);
+
+    const table = tables.find(t => t.id === order.table_id);
+
+    let itemsHtml = '';
+    if (items && items.length > 0) {
+        itemsHtml = items.map(item =>
+            `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;border-bottom:1px solid #eee;">
+                                <span>${escapeHtml(item.menu_items?.name || t('default_item'))} × ${item.quantity}</span>
+                                <span>${money(item.unit_price * item.quantity)}</span>
+                            </div>`
+        ).join('');
+    }
+
+    const receiptHTML = `<div style="font-family:var(--font);max-width:320px;margin:0 auto;padding:16px;background:#fff;color:#1A1A2E;border-radius:8px;direction:rtl;">
+                            <div style="text-align:center;border-bottom:2px dashed #ddd;padding-bottom:10px;">
+                                <div style="font-size:20px;font-weight:900;color:var(--primary-dark);">${escapeHtml(business.name)}</div>
+                                <div style="font-size:11px;color:#888;">${escapeHtml(business.code)}</div>
+                                <div style="font-size:11px;color:#888;">${t('order')} #${order.id.slice(0, 8)}</div>
+                                <div style="font-size:11px;color:#888;">${t('table')} ${table?.number || '?'}</div>
+                            </div>
+                            <div style="padding:10px 0;border-bottom:1px dashed #ddd;">${itemsHtml}</div>
+                            <div style="padding:8px 0;">
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:14px;">
+                                    <span>${t('subtotal')}</span>
+                                    <span>${money(subtotal)}</span>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:#666;">
+                                    <span>${t('service_fee')} (${serviceFeePercent}%)</span>
+                                    <span>${money(serviceFee)}</span>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;color:#666;">
+                                    <span>${t('vat')} (${vatPercent}%)</span>
+                                    <span>${money(vat)}</span>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;padding:6px 0 0 0;border-top:2px solid var(--primary);font-weight:700;font-size:18px;color:var(--primary-dark);">
+                                    <span>${t('total')}</span>
+                                    <span>${money(total)}</span>
+                                </div>
+                            </div>
+                            <div style="text-align:center;border-top:2px dashed #ddd;padding-top:10px;font-size:12px;color:#888;">شكراً لزيارتكم 🌟</div>
+                        </div>`;
+
+    const printWindow = window.open('', '_blank', 'width=400,height=600');
+    if (printWindow) {
+        printWindow.document.write(`<html><head><title>${t('print_receipt')}</title>
+                            <style>body{font-family:'Cairo',sans-serif;margin:0;padding:20px;background:#f5f5f5;}</style>
+                            </head><body>${receiptHTML}
+                            <div style="text-align:center;margin-top:12px;">
+                                <button onclick="window.print()" style="padding:10px 30px;background:#E8B84B;border:none;border-radius:8px;font-weight:700;cursor:pointer;">🖨️ ${t('print')}</button>
+                                <button onclick="window.close()" style="padding:10px 30px;background:#eee;border:none;border-radius:8px;font-weight:700;cursor:pointer;margin-right:8px;">${t('close')}</button>
+                            </div>
+                            <script>setTimeout(() => { window.print(); }, 600);<\/script>
+                            </body></html>`);
+        printWindow.document.close();
+    } else {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+async function confirmPaymentAndClose(orderId) {
+    const paymentId = document.querySelector('.payment-option.selected')?.dataset.id;
+    if (!paymentId) {
+        document.getElementById('paymentError').textContent = t('error_general');
+        return;
+    }
+
+    if (!supabaseClient) return;
+
+    try {
+        const order = Object.values(orders).find(o => o.id === orderId);
+        if (!order) throw new Error('Order not found');
+
+        const subtotal = order.subtotal || order.total || 0;
+        const serviceFee = subtotal * (serviceFeePercent / 100);
+        const vat = (subtotal + serviceFee) * (vatPercent / 100);
+        const total = subtotal + serviceFee + vat;
+
+        const { error: paymentInsertError } = await supabaseClient.from('payments').insert({
+            order_id: orderId,
+            amount: total,
+            method_id: paymentId,
+            status: 'completed'
+        });
+        if (paymentInsertError) {
+            console.error('❌ Payment insert failed:', paymentInsertError.message || paymentInsertError);
+            document.getElementById('paymentError').textContent = t('payment_failed');
+            return;
+        }
+
+        const { error: orderUpdateError } = await supabaseClient.from('orders').update({
+            status: 'paid',
+            total: total
+        }).eq('id', orderId);
+        if (orderUpdateError) {
+            console.error('❌ Order status update to paid failed:', orderUpdateError.message || orderUpdateError);
+            document.getElementById('paymentError').textContent = t('payment_failed');
+            return;
+        }
+
+        await supabaseClient.from('tables').update({ status: 'available' }).eq('id', order.table_id);
+
+        orderStatus[orderId] = 'paid';
+        closeSheet('tableOverlay');
+        showToast(t('payment_success'), 'success');
+
+        await loadActiveOrders();
+        renderTables();
+        renderKitchenOrders();
+        renderDashboard();
+    } catch (e) {
+        document.getElementById('paymentError').textContent = t('payment_failed');
+    }
+}
+
+// ============================================================
+// MENU MANAGEMENT
+// ============================================================
+function renderMenuView() {
+    const el = document.getElementById('menuView');
+    if (menuItems.length === 0) {
+        el.innerHTML = `<div class="empty"><i class="fa-solid fa-utensils"></i>${t('no_items')}</div>`;
+        return;
+    }
+    let html = '';
+    if (menuCategories.length === 0) {
+        menuItems.forEach(item => {
+            const imageHtml = item.image_url ?
+                `<img src="${item.image_url}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;" onerror="this.style.display='none'">` :
+                '';
+            html += `<div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:14px;margin-bottom:8px;display:flex;gap:14px;align-items:center;">
+                                    ${imageHtml ? `<div style="flex-shrink:0;">${imageHtml}</div>` : ''}
+                                    <div style="flex:1;">
+                                        <div style="font-weight:700;">${escapeHtml(item.name)}</div>
+                                        ${item.description ? `<div style="font-size:12px;color:var(--text-muted);">${escapeHtml(item.description)}</div>` : ''}
+                                    </div>
+                                    <div style="font-weight:700;color:var(--primary-dark);">${money(item.price)}</div>
+                                </div>`;
+        });
+    } else {
+        menuCategories.forEach(cat => {
+            const items = menuItems.filter(item => item.category_id === cat.id);
+            if (items.length === 0) return;
+            html += `<div style="margin-bottom:16px;">
+                                    <div style="font-weight:700;font-size:16px;color:var(--primary-dark);margin-bottom:8px;">
+                                        <i class="fa-solid ${cat.icon || 'fa-utensils'}"></i> ${escapeHtml(cat.name)}
+                                    </div>
+                                    ${items.map(item => {
+                                        const imageHtml = item.image_url ?
+                                            `<img src="${item.image_url}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;" onerror="this.style.display='none'">` :
+                                            '';
+                                        return `<div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:6px;display:flex;gap:12px;align-items:center;">
+                                                    ${imageHtml ? `<div style="flex-shrink:0;">${imageHtml}</div>` : ''}
+                                                    <div style="flex:1;">
+                                                        <div style="font-weight:600;">${escapeHtml(item.name)}</div>
+                                                        ${item.description ? `<div style="font-size:11px;color:var(--text-muted);">${escapeHtml(item.description)}</div>` : ''}
+                                                    </div>
+                                                    <div style="font-weight:700;color:var(--primary-dark);">${money(item.price)}</div>
+                                                </div>`;
+                                    }).join('')}
+                                </div>`;
+        });
+    }
+    el.innerHTML = html;
+}
+
+function renderMenuManagement() {
+    const el = document.getElementById('menuManagementList');
+    if (menuItems.length === 0) {
+        el.innerHTML = `<div class="empty" style="padding:12px;">${t('no_items')}</div>`;
+        return;
+    }
+    el.innerHTML = menuItems.map(item => {
+        const cat = menuCategories.find(c => c.id === item.category_id);
+        return `<div class="list-row">
+                            <div>
+                                <div class="row-title">${escapeHtml(item.name)}</div>
+                                <div class="row-sub">${money(item.price)} ${cat ? '· ' + escapeHtml(cat.name) : ''} ${item.image_url ? '🖼️' : ''}</div>
+                            </div>
+                            <div class="row-actions">
+                                <button class="btn btn-ghost btn-xs" onclick="editMenuItem('${item.id}')"><i class="fa-solid fa-pen"></i></button>
+                                <button class="btn btn-danger btn-xs" onclick="deleteMenuItem('${item.id}')"><i class="fa-solid fa-trash"></i></button>
+                            </div>
+                        </div>`;
+    }).join('');
+}
+
+function openMenuItemSheet() {
+    if (!hasPermission('manage_menu')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    document.getElementById('editMenuItemId').value = '';
+    document.getElementById('menuItemName').value = '';
+    document.getElementById('menuItemPrice').value = '';
+    document.getElementById('menuItemDesc').value = '';
+    document.getElementById('menuItemImageInput').value = '';
+    document.getElementById('menuItemImagePreview').style.display = 'none';
+    document.getElementById('menuItemImageData').value = '';
+    document.getElementById('menuItemActive').checked = true;
+    document.getElementById('menuItemSheetTitle').textContent = t('add_item');
+    document.getElementById('deleteMenuItemBtn').style.display = 'none';
+    document.getElementById('menuItemError').textContent = '';
+
+    const catSelect = document.getElementById('menuItemCategory');
+    catSelect.innerHTML = '<option value="">' + t('no_categories') + '</option>';
+    menuCategories.forEach(cat => {
+        catSelect.innerHTML += `<option value="${cat.id}">${escapeHtml(cat.name)}</option>`;
+    });
+
+    document.getElementById('saveMenuItemBtn').onclick = saveMenuItem;
+    openSheet('menuItemOverlay');
+}
+
+function editMenuItem(itemId) {
+    if (!hasPermission('manage_menu')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    const item = menuItems.find(i => i.id === itemId);
+    if (!item) return;
+    document.getElementById('editMenuItemId').value = item.id;
+    document.getElementById('menuItemName').value = item.name;
+    document.getElementById('menuItemPrice').value = item.price;
+    document.getElementById('menuItemDesc').value = item.description || '';
+    document.getElementById('menuItemImageData').value = item.image_url || '';
+    if (item.image_url) {
+        document.getElementById('menuItemImagePreviewImg').src = item.image_url;
+        document.getElementById('menuItemImagePreview').style.display = 'block';
+    } else {
+        document.getElementById('menuItemImagePreview').style.display = 'none';
+    }
+    document.getElementById('menuItemActive').checked = item.is_active !== false;
+    document.getElementById('menuItemSheetTitle').textContent = t('edit');
+    document.getElementById('deleteMenuItemBtn').style.display = 'flex';
+    document.getElementById('menuItemError').textContent = '';
+
+    const catSelect = document.getElementById('menuItemCategory');
+    catSelect.innerHTML = '<option value="">' + t('no_categories') + '</option>';
+    menuCategories.forEach(cat => {
+        const selected = cat.id === item.category_id ? 'selected' : '';
+        catSelect.innerHTML += `<option value="${cat.id}" ${selected}>${escapeHtml(cat.name)}</option>`;
+    });
+
+    document.getElementById('saveMenuItemBtn').onclick = saveMenuItem;
+    document.getElementById('deleteMenuItemBtn').onclick = () => deleteMenuItem(itemId);
+    openSheet('menuItemOverlay');
+}
+
+async function saveMenuItem() {
+    const id = document.getElementById('editMenuItemId').value;
+    const name = document.getElementById('menuItemName').value.trim();
+    const price = parseFloat(document.getElementById('menuItemPrice').value);
+    const description = document.getElementById('menuItemDesc').value.trim();
+    const image_data = document.getElementById('menuItemImageData').value;
+    const category_id = document.getElementById('menuItemCategory').value || null;
+    const is_active = document.getElementById('menuItemActive').checked;
+    const errEl = document.getElementById('menuItemError');
+
+    if (!name || isNaN(price) || price < 0) { errEl.textContent = t('error_general'); return; }
+    if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
+
+    try {
+        const data = { name, price, description, image_url: image_data || null, category_id, is_active };
+        if (id) {
+            await supabaseClient.from('menu_items').update(data).eq('id', id);
+            showToast(t('item_updated'), 'success');
+        } else {
+            data.business_id = business.id;
+            await supabaseClient.from('menu_items').insert(data);
+            showToast(t('item_added'), 'success');
+        }
+        closeSheet('menuItemOverlay');
+        await loadMenuItems();
+        renderMenuView();
+        renderMenuManagement();
+        renderSettings();
+    } catch (e) {
+        errEl.textContent = t('error_general');
+    }
+}
+
+async function deleteMenuItem(itemId) {
+    if (!hasPermission('manage_menu')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    if (!confirm(t('delete') + '؟')) return;
+    if (!supabaseClient) return;
+    try {
+        await supabaseClient.from('menu_items').delete().eq('id', itemId);
+        showToast(t('item_deleted'), 'success');
+        closeSheet('menuItemOverlay');
+        await loadMenuItems();
+        renderMenuView();
+        renderMenuManagement();
+        renderSettings();
+    } catch (e) {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+function openCategorySheet() {
+    if (!hasPermission('manage_menu')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    document.getElementById('categoryName').value = '';
+    document.getElementById('categoryIcon').value = 'fa-utensils';
+    document.getElementById('categoryError').textContent = '';
+    document.getElementById('saveCategoryBtn').onclick = saveCategory;
+    openSheet('categoryOverlay');
+}
+
+async function saveCategory() {
+    const name = document.getElementById('categoryName').value.trim();
+    const icon = document.getElementById('categoryIcon').value;
+    const errEl = document.getElementById('categoryError');
+    
+    if (!name) { 
+        errEl.textContent = '⚠️ أدخل اسم التصنيف';
+        return; 
+    }
+    
+    if (!supabaseClient) { 
+        errEl.textContent = t('error_connection');
+        return; 
+    }
+    
+    try {
+        const { data, error } = await supabaseClient.from('menu_categories').insert({
+            business_id: business.id,
+            name: name,
+            icon: icon,
+            is_active: true,
+            sort_order: menuCategories.length + 1
+        }).select();
+        
+        if (error) throw error;
+        
+        showToast('✅ تم إضافة التصنيف بنجاح!', 'success');
+        closeSheet('categoryOverlay');
+        await loadMenuCategories();
+        renderMenuView();
+        renderMenuManagement();
+        renderSettings();
+        renderMenuCategoriesList();
+    } catch (e) { 
+        errEl.textContent = t('error_general');
+        console.error(e);
+    }
+}
+
+function renderMenuCategoriesList() {
+    const container = document.getElementById('settingsCategoriesList');
+    if (!container) return;
+    
+    if (menuCategories.length === 0) {
+        container.innerHTML = `<div class="empty" style="padding:12px;">${t('no_categories')}</div>`;
+        return;
+    }
+    
+    container.innerHTML = menuCategories.map(cat => `
+        <div class="list-row">
+            <div>
+                <div class="row-title"><i class="fa-solid ${cat.icon || 'fa-utensils'}"></i> ${escapeHtml(cat.name)}</div>
+                <div class="row-sub">${cat.is_active ? '✅ نشط' : '⛔ موقف'}</div>
+            </div>
+            <div class="row-actions">
+                <button class="btn btn-danger btn-xs" onclick="deleteCategory('${cat.id}')"><i class="fa-solid fa-trash"></i></button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function deleteCategory(categoryId) {
+    if (!confirm('متأكد من حذف هذا التصنيف؟')) return;
+    if (!supabaseClient) return;
+    
+    try {
+        await supabaseClient.from('menu_categories').delete().eq('id', categoryId);
+        showToast('✅ تم حذف التصنيف', 'success');
+        await loadMenuCategories();
+        renderMenuView();
+        renderMenuManagement();
+        renderSettings();
+        renderMenuCategoriesList();
+    } catch (e) {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+// ============================================================
+// PDF MENU IMPORT
+// ============================================================
+let pdfImportParsedData = null; // [{ name: string|null, items: [{tempId, name, price, include}] }]
+
+function openPdfImportSheet() {
+    if (!hasPermission('manage_menu')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    document.getElementById('pdfImportFileInput').value = '';
+    document.getElementById('pdfImportStatus').textContent = '';
+    document.getElementById('pdfImportError').textContent = '';
+    document.getElementById('pdfImportAnalyzeBtn').disabled = false;
+    document.getElementById('pdfImportAnalyzeBtn').innerHTML = '<i class="fa-solid fa-magnifying-glass"></i> <span data-i18n="import_pdf_analyze">' + t('import_pdf_analyze') + '</span>';
+    document.getElementById('pdfImportUploadStep').style.display = 'block';
+    document.getElementById('pdfImportReviewStep').style.display = 'none';
+    pdfImportParsedData = null;
+    openSheet('pdfImportOverlay');
+}
+
+function cancelPdfImportReview() {
+    closeSheet('pdfImportOverlay');
+    pdfImportParsedData = null;
+}
+
+// Groups raw pdf.js text items (from getTextContent) into visual lines using their Y position,
+// and keeps the max font size per line (used later to tell category headers from item lines).
+function groupPdfTextIntoLines(items) {
+    const rows = [];
+    items.forEach(item => {
+        if (!item.str || !item.str.trim()) return;
+        const fontSize = Math.abs(item.transform[3]) || Math.abs(item.transform[0]) || 10;
+        const y = Math.round(item.transform[5]);
+        const x = item.transform[4];
+        let row = rows.find(r => Math.abs(r.y - y) < 3);
+        if (!row) {
+            row = { y, parts: [] };
+            rows.push(row);
+        }
+        row.parts.push({ x, str: item.str, fontSize });
+    });
+    rows.sort((a, b) => b.y - a.y);
+    return rows.map(row => {
+        row.parts.sort((a, b) => a.x - b.x);
+        const text = row.parts.map(p => p.str).join(' ').replace(/\s+/g, ' ').trim();
+        const maxFontSize = Math.max(...row.parts.map(p => p.fontSize));
+        return { text, fontSize: maxFontSize };
+    }).filter(l => l.text);
+}
+
+// Tries to pull a trailing price (with optional dot-leaders and currency word) off the end of a line.
+function extractPriceFromPdfLine(text) {
+    const regex = /([.\-_·•\s]{2,}|\s)(\d+(?:[.,]\d{1,2})?)\s*(ج\.?م\.?|جنيه(?:اً|ا)?|جنيه مصري|EGP|LE|L\.E\.?|\$|USD|EUR|€)?\s*$/i;
+    const match = text.match(regex);
+    if (!match) return null;
+    const price = parseFloat(match[2].replace(',', '.'));
+    if (isNaN(price) || price <= 0 || price > 100000) return null;
+    const name = text.slice(0, match.index).replace(/[.\-_·•\s]+$/, '').trim();
+    if (!name || name.length > 80) return null;
+    return { name, price };
+}
+
+// Heuristic parser: lines ending in a price become items; short lines in a noticeably bigger
+// font (and with no price) become category headers that group the items under them.
+function parseMenuLinesIntoGroups(lines) {
+    const withPrice = lines.map(l => ({ ...l, priceInfo: extractPriceFromPdfLine(l.text) }));
+    const itemFontSizes = withPrice.filter(l => l.priceInfo).map(l => l.fontSize);
+    const avgItemFontSize = itemFontSizes.length ? itemFontSizes.reduce((a, b) => a + b, 0) / itemFontSizes.length : 12;
+
+    const groups = [];
+    let currentGroup = { name: null, items: [] };
+    let itemCounter = 0;
+
+    const pushCurrentGroup = () => { if (currentGroup.items.length > 0) groups.push(currentGroup); };
+
+    withPrice.forEach(line => {
+        const text = line.text.trim();
+        if (!text) return;
+        if (line.priceInfo) {
+            itemCounter++;
+            currentGroup.items.push({
+                tempId: 'pdfitem_' + itemCounter,
+                name: line.priceInfo.name,
+                price: line.priceInfo.price,
+                include: true
+            });
+        } else {
+            const wordCount = text.split(/\s+/).length;
+            const isBigger = line.fontSize >= avgItemFontSize * 1.12;
+            if (wordCount <= 6 && text.length <= 40 && isBigger) {
+                pushCurrentGroup();
+                currentGroup = { name: text, items: [] };
+            }
+            // otherwise treat as noise/description and ignore it
+        }
+    });
+    pushCurrentGroup();
+
+    // merge groups that share the same header text (e.g. repeated across pages)
+    const merged = [];
+    groups.forEach(g => {
+        const existing = merged.find(m => (m.name || '').trim().toLowerCase() === (g.name || '').trim().toLowerCase());
+        if (existing) existing.items.push(...g.items);
+        else merged.push(g);
+    });
+    return merged;
+}
+
+async function analyzePdfMenu() {
+    const fileInput = document.getElementById('pdfImportFileInput');
+    const statusEl = document.getElementById('pdfImportStatus');
+    const errEl = document.getElementById('pdfImportError');
+    const btn = document.getElementById('pdfImportAnalyzeBtn');
+    errEl.textContent = '';
+
+    if (!fileInput.files || fileInput.files.length === 0) {
+        errEl.textContent = t('pdf_error_no_file');
+        return;
+    }
+    if (typeof pdfjsLib === 'undefined') {
+        errEl.textContent = t('pdf_error_read_fail');
+        return;
+    }
+
+    const file = fileInput.files[0];
+    btn.disabled = true;
+    statusEl.textContent = t('pdf_status_reading');
+
+    try {
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+        }
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+        const allLines = [];
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            allLines.push(...groupPdfTextIntoLines(textContent.items));
+        }
+
+        statusEl.textContent = t('pdf_status_parsing');
+        const parsed = parseMenuLinesIntoGroups(allLines);
+
+        if (!parsed.length || parsed.every(g => g.items.length === 0)) {
+            statusEl.textContent = '';
+            errEl.textContent = t('pdf_no_items_found');
+            btn.disabled = false;
+            return;
+        }
+
+        pdfImportParsedData = parsed;
+        statusEl.textContent = '';
+        btn.disabled = false;
+        renderPdfImportReview();
+        document.getElementById('pdfImportUploadStep').style.display = 'none';
+        document.getElementById('pdfImportReviewStep').style.display = 'block';
+    } catch (e) {
+        console.error('PDF import error:', e);
+        statusEl.textContent = '';
+        errEl.textContent = t('pdf_error_read_fail');
+        btn.disabled = false;
+    }
+}
+
+function renderPdfImportReview() {
+    const container = document.getElementById('pdfImportPreviewList');
+    if (!pdfImportParsedData || pdfImportParsedData.length === 0) {
+        container.innerHTML = `<div class="empty">${t('pdf_no_items_found')}</div>`;
+        return;
+    }
+
+    const totalItems = pdfImportParsedData.reduce((sum, g) => sum + g.items.length, 0);
+    let html = `<div style="font-size:13px;font-weight:700;color:var(--primary-dark);margin-bottom:10px;">${t('pdf_items_found', { count: totalItems })}</div>`;
+
+    pdfImportParsedData.forEach((group, gIdx) => {
+        const matchExisting = group.name ? menuCategories.find(c => c.name.trim().toLowerCase() === group.name.trim().toLowerCase()) : null;
+        const showNewCatInput = !!group.name && !matchExisting;
+
+        html += `<div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:12px;margin-bottom:10px;">`;
+        html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                    <i class="fa-solid fa-tags" style="color:var(--primary);flex-shrink:0;"></i>
+                    <select id="pdfGroupCat_${gIdx}" onchange="onPdfGroupCategoryChange(${gIdx})" style="flex:1;min-width:130px;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:var(--font);font-size:13px;">
+                        <option value="">${t('pdf_uncategorized')}</option>
+                        ${menuCategories.map(cat => `<option value="${cat.id}" ${matchExisting && matchExisting.id === cat.id ? 'selected' : ''}>${escapeHtml(cat.name)}</option>`).join('')}
+                        ${group.name ? `<option value="__new__" ${showNewCatInput ? 'selected' : ''}>${escapeHtml(group.name)} (${t('pdf_new_category')})</option>` : ''}
+                        <option value="__addnew__">${t('pdf_add_new_category')}</option>
+                    </select>
+                    <input type="text" id="pdfGroupNewCatName_${gIdx}" placeholder="${t('pdf_new_category_placeholder')}" value="${showNewCatInput ? escapeHtml(group.name) : ''}" style="display:${showNewCatInput ? 'block' : 'none'};flex:1;min-width:130px;padding:8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:var(--font);font-size:13px;">
+                </div>`;
+
+        group.items.forEach(item => {
+            html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border-light);flex-wrap:wrap;">
+                        <input type="checkbox" id="pdfItemInclude_${item.tempId}" ${item.include ? 'checked' : ''} style="width:auto;flex-shrink:0;">
+                        <input type="text" id="pdfItemName_${item.tempId}" value="${escapeHtml(item.name)}" style="flex:2;min-width:110px;padding:7px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:var(--font);font-size:13px;">
+                        <input type="number" id="pdfItemPrice_${item.tempId}" value="${item.price}" class="mono" style="width:78px;flex-shrink:0;padding:7px 8px;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:var(--font);font-size:13px;">
+                    </div>`;
+        });
+
+        html += `</div>`;
+    });
+
+    container.innerHTML = html;
+}
+
+function onPdfGroupCategoryChange(gIdx) {
+    const sel = document.getElementById(`pdfGroupCat_${gIdx}`);
+    const nameInput = document.getElementById(`pdfGroupNewCatName_${gIdx}`);
+    if (sel.value === '__new__' || sel.value === '__addnew__') {
+        if (sel.value === '__addnew__') nameInput.value = '';
+        nameInput.style.display = 'block';
+        nameInput.focus();
+    } else {
+        nameInput.style.display = 'none';
+    }
+}
+
+async function confirmPdfImport() {
+    if (!pdfImportParsedData) return;
+    const errEl = document.getElementById('pdfImportReviewError');
+    const btn = document.getElementById('pdfImportConfirmBtn');
+    errEl.textContent = '';
+
+    if (!supabaseClient) {
+        errEl.textContent = t('error_connection');
+        return;
+    }
+
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + t('loading');
+
+    try {
+        let addedCount = 0;
+        let hadError = false;
+
+        for (let gIdx = 0; gIdx < pdfImportParsedData.length; gIdx++) {
+            const group = pdfImportParsedData[gIdx];
+            const includedItems = group.items.filter(item => document.getElementById(`pdfItemInclude_${item.tempId}`)?.checked);
+            if (includedItems.length === 0) continue;
+
+            const catSelect = document.getElementById(`pdfGroupCat_${gIdx}`);
+            let categoryId = null;
+
+            if (catSelect.value === '__new__' || catSelect.value === '__addnew__') {
+                const newCatName = (document.getElementById(`pdfGroupNewCatName_${gIdx}`).value || '').trim();
+                if (newCatName) {
+                    const existingCat = menuCategories.find(c => c.name.trim().toLowerCase() === newCatName.toLowerCase());
+                    if (existingCat) {
+                        categoryId = existingCat.id;
+                    } else {
+                        const { data, error } = await supabaseClient.from('menu_categories').insert({
+                            business_id: business.id,
+                            name: newCatName,
+                            icon: 'fa-utensils',
+                            is_active: true,
+                            sort_order: menuCategories.length + 1
+                        }).select();
+                        if (error) throw error;
+                        if (data && data[0]) {
+                            menuCategories.push(data[0]);
+                            categoryId = data[0].id;
+                        }
+                    }
+                }
+            } else if (catSelect.value) {
+                categoryId = catSelect.value;
+            }
+
+            for (const item of includedItems) {
+                const nameVal = document.getElementById(`pdfItemName_${item.tempId}`).value.trim();
+                const priceVal = parseFloat(document.getElementById(`pdfItemPrice_${item.tempId}`).value);
+                if (!nameVal || isNaN(priceVal) || priceVal < 0) { hadError = true; continue; }
+                try {
+                    const { error } = await supabaseClient.from('menu_items').insert({
+                        business_id: business.id,
+                        name: nameVal,
+                        price: priceVal,
+                        description: '',
+                        image_url: null,
+                        category_id: categoryId,
+                        is_active: true
+                    });
+                    if (error) throw error;
+                    addedCount++;
+                } catch (e) {
+                    hadError = true;
+                }
+            }
+        }
+
+        await loadMenuCategories();
+        await loadMenuItems();
+        renderMenuView();
+        renderMenuManagement();
+        renderMenuCategoriesList();
+        renderSettings();
+
+        closeSheet('pdfImportOverlay');
+        pdfImportParsedData = null;
+
+        if (addedCount > 0) {
+            showToast(hadError ? t('pdf_import_error') : t('pdf_import_success'), hadError ? 'error' : 'success');
+        } else {
+            errEl.textContent = t('pdf_import_error');
+        }
+    } catch (e) {
+        console.error('PDF import confirm error:', e);
+        errEl.textContent = t('error_general');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+    }
+}
+
+// ============================================================
+// EXPENSE
+// ============================================================
+function openExpenseSheet() {
+    if (!hasPermission('add_expense')) {
+        showToast(t('error_permission'), 'error');
+        return;
+    }
+    document.getElementById('expenseDesc').value = '';
+    document.getElementById('expenseAmount').value = '';
+    document.getElementById('expenseError').textContent = '';
+    document.getElementById('saveExpenseBtn').onclick = saveExpense;
+    openSheet('expenseOverlay');
+}
+
+async function saveExpense() {
+    const description = document.getElementById('expenseDesc').value.trim();
+    const amount = parseFloat(document.getElementById('expenseAmount').value);
+    const errEl = document.getElementById('expenseError');
+    if (!description || isNaN(amount) || amount <= 0) { errEl.textContent = t('error_general'); return; }
+    if (!supabaseClient || !currentShift) { errEl.textContent = t('error_general'); return; }
+    try {
+        const { error } = await supabaseClient.from('expenses').insert({
+            business_id: business.id,
+            shift_id: currentShift.id,
+            description,
+            amount
+        });
+        if (error) {
+            console.error('❌ Expense insert failed:', error.message || error);
+            errEl.textContent = t('error_general');
+            return;
+        }
+        showToast(t('expense_added'), 'success');
+        closeSheet('expenseOverlay');
+        renderDashboard();
+        document.getElementById('expenseDesc').value = '';
+        document.getElementById('expenseAmount').value = '';
+    } catch (e) {
+        console.error('❌ Expense insert exception:', e);
+        errEl.textContent = t('error_general');
+    }
+}
+
+// ============================================================
+// PAYMENT METHOD
+// ============================================================
+function openPaymentMethodSheet() {
+    document.getElementById('editPaymentMethodId').value = '';
+    document.getElementById('paymentMethodName').value = '';
+    document.getElementById('paymentMethodIcon').value = 'fa-money-bill-wave';
+    document.getElementById('paymentMethodSheetTitle').textContent = t('add_payment_method');
+    document.getElementById('deletePaymentMethodBtn').style.display = 'none';
+    document.getElementById('paymentMethodError').textContent = '';
+    document.getElementById('savePaymentMethodBtn').onclick = savePaymentMethod;
+    openSheet('paymentMethodOverlay');
+}
+
+async function savePaymentMethod() {
+    const name = document.getElementById('paymentMethodName').value.trim();
+    const icon = document.getElementById('paymentMethodIcon').value;
+    const errEl = document.getElementById('paymentMethodError');
+    if (!name) { errEl.textContent = t('error_general'); return; }
+    if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
+    try {
+        await supabaseClient.from('payment_methods').insert({
+            business_id: business.id,
+            name: name,
+            icon: icon,
+            is_active: true
+        });
+        showToast(t('payment_method_added'), 'success');
+        closeSheet('paymentMethodOverlay');
+        await loadPaymentMethods();
+        renderSettings();
+    } catch (e) { errEl.textContent = t('error_general'); }
+}
+
+// ============================================================
+// EMPLOYEE MANAGEMENT
+// ============================================================
+function openEmployeeSheet() {
+    document.getElementById('editEmployeeId').value = '';
+    document.getElementById('employeeName').value = '';
+    document.getElementById('employeePin').value = '';
+    document.getElementById('employeeRole').value = 'waiter';
+    document.getElementById('deleteEmployeeBtn').style.display = 'none';
+    document.getElementById('employeeError').textContent = '';
+
+    setDefaultPermissions('waiter');
+
+    document.getElementById('saveEmployeeBtn').onclick = saveEmployee;
+    openSheet('employeeOverlay');
+}
+
+function setDefaultPermissions(role) {
+    const defaults = {
+        waiter: {
+            dashboard: false, tables: true, orders: false, menu: false, settings: false,
+            create_orders: true, add_expense: false, close_shift: false, print_receipt: true,
+            manage_menu: false, view_revenue: false, view_expenses: false
+        },
+        chef: {
+            dashboard: false, tables: false, orders: true, menu: false, settings: false,
+            create_orders: false, add_expense: false, close_shift: false, print_receipt: false,
+            manage_menu: false, view_revenue: false, view_expenses: false
+        },
+        cashier: {
+            dashboard: true, tables: true, orders: true, menu: false, settings: false,
+            create_orders: true, add_expense: true, close_shift: true, print_receipt: true,
+            manage_menu: false, view_revenue: true, view_expenses: true
+        },
+        admin: {
+            dashboard: true, tables: true, orders: true, menu: true, settings: true,
+            create_orders: true, add_expense: true, close_shift: true, print_receipt: true,
+            manage_menu: true, view_revenue: true, view_expenses: true
+        }
+    };
+
+    const perms = defaults[role] || defaults.waiter;
+    document.getElementById('permDashboard').checked = perms.dashboard;
+    document.getElementById('permTables').checked = perms.tables;
+    document.getElementById('permOrders').checked = perms.orders;
+    document.getElementById('permMenu').checked = perms.menu;
+    document.getElementById('permSettings').checked = perms.settings;
+    document.getElementById('permCreateOrders').checked = perms.create_orders;
+    document.getElementById('permAddExpense').checked = perms.add_expense;
+    document.getElementById('permCloseShift').checked = perms.close_shift;
+    document.getElementById('permPrintReceipt').checked = perms.print_receipt;
+    document.getElementById('permManageMenu').checked = perms.manage_menu;
+    document.getElementById('permViewRevenue').checked = perms.view_revenue;
+    document.getElementById('permViewExpenses').checked = perms.view_expenses;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const roleSelect = document.getElementById('employeeRole');
+    if (roleSelect) {
+        roleSelect.addEventListener('change', function() {
+            const isEdit = document.getElementById('editEmployeeId').value !== '';
+            if (!isEdit) {
+                setDefaultPermissions(this.value);
+            }
+        });
+    }
+});
+
+function editEmployee(empId) {
+    const emp = employees.find(e => e.id === empId);
+    if (!emp) return;
+
+    document.getElementById('editEmployeeId').value = emp.id;
+    document.getElementById('employeeName').value = emp.name;
+    document.getElementById('employeePin').value = emp.pin;
+    document.getElementById('employeeRole').value = emp.role || 'waiter';
+    document.getElementById('deleteEmployeeBtn').style.display = 'flex';
+    document.getElementById('employeeError').textContent = '';
+
+    const perms = emp.permissions || {};
+    document.getElementById('permDashboard').checked = perms.dashboard !== false;
+    document.getElementById('permTables').checked = perms.tables !== false;
+    document.getElementById('permOrders').checked = perms.orders !== false;
+    document.getElementById('permMenu').checked = perms.menu !== false;
+    document.getElementById('permSettings').checked = perms.settings === true;
+    document.getElementById('permCreateOrders').checked = perms.create_orders !== false;
+    document.getElementById('permAddExpense').checked = perms.add_expense === true;
+    document.getElementById('permCloseShift').checked = perms.close_shift === true;
+    document.getElementById('permPrintReceipt').checked = perms.print_receipt !== false;
+    document.getElementById('permManageMenu').checked = perms.manage_menu === true;
+    document.getElementById('permViewRevenue').checked = perms.view_revenue === true;
+    document.getElementById('permViewExpenses').checked = perms.view_expenses === true;
+
+    document.getElementById('saveEmployeeBtn').onclick = saveEmployee;
+    document.getElementById('deleteEmployeeBtn').onclick = () => deleteEmployee(empId);
+    openSheet('employeeOverlay');
+}
+
+async function saveEmployee() {
+    const id = document.getElementById('editEmployeeId').value;
+    const name = document.getElementById('employeeName').value.trim();
+    const pin = document.getElementById('employeePin').value.trim();
+    const role = document.getElementById('employeeRole').value;
+    const errEl = document.getElementById('employeeError');
+
+    const permissions = {
+        dashboard: document.getElementById('permDashboard').checked,
+        tables: document.getElementById('permTables').checked,
+        orders: document.getElementById('permOrders').checked,
+        menu: document.getElementById('permMenu').checked,
+        settings: document.getElementById('permSettings').checked,
+        create_orders: document.getElementById('permCreateOrders').checked,
+        add_expense: document.getElementById('permAddExpense').checked,
+        close_shift: document.getElementById('permCloseShift').checked,
+        print_receipt: document.getElementById('permPrintReceipt').checked,
+        manage_menu: document.getElementById('permManageMenu').checked,
+        view_revenue: document.getElementById('permViewRevenue').checked,
+        view_expenses: document.getElementById('permViewExpenses').checked
+    };
+
+    if (!name || !pin || !/^\d{4,6}$/.test(pin)) { errEl.textContent = t('error_general'); return; }
+    if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
+
+    try {
+        const data = { name, pin, role, is_active: true, permissions: permissions };
+
+        if (id) {
+            await supabaseClient.from('employees').update(data).eq('id', id);
+            showToast(t('employee_updated'), 'success');
+        } else {
+            data.business_id = business.id;
+            await supabaseClient.from('employees').insert(data);
+            showToast(t('employee_added'), 'success');
+        }
+        closeSheet('employeeOverlay');
+        await loadEmployees();
+        renderSettings();
+    } catch (e) {
+        errEl.textContent = t('error_general');
+    }
+}
+
+async function deleteEmployee(empId) {
+    if (!confirm(t('delete') + '؟')) return;
+    if (!supabaseClient) return;
+    try {
+        await supabaseClient.from('employees').delete().eq('id', empId);
+        showToast(t('employee_deleted'), 'success');
+        closeSheet('employeeOverlay');
+        await loadEmployees();
+        renderSettings();
+    } catch (e) {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+// ============================================================
+// SETTINGS
+// ============================================================
+function renderSettings() {
+    const el = document.getElementById('settingsContent');
+    const currentTheme = localStorage.getItem('platepro_theme') || 'dark';
+    const isDark = currentTheme === 'dark';
+
+    el.innerHTML = `<div class="section-title" data-i18n="appearance">🎨 المظهر</div>
+                        <div class="theme-toggle">
+                            <div class="toggle-icons">
+                                <span class="icon-moon">🌙</span>
+                                <span class="icon-sun">☀️</span>
+                            </div>
+                            <div class="toggle-switch ${!isDark ? 'active' : ''}" id="themeToggle" onclick="toggleTheme()">
+                                <div class="toggle-slider"></div>
+                            </div>
+                            <span class="toggle-label" id="themeToggleLabel">${isDark ? t('dark') : t('light')}</span>
+                        </div>
+                        
+                        <div class="section-title" data-i18n="logo">🖼️ الشعار</div>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            ${businessLogo ? `<img src="${businessLogo}" style="width:60px;height:60px;border-radius:50%;border:2px solid var(--primary);object-fit:cover;">` : '<span style="color:var(--text-muted);">' + t('no_logo') + '</span>'}
+                            <button class="btn btn-primary btn-sm" onclick="openLogoSettings()"><i class="fa-solid fa-pen"></i> ${t('edit_logo')}</button>
+                        </div>
+                        
+                        <div class="section-title" data-i18n="fees">💰 الرسوم والضرائب</div>
+                        <div class="list-row"><div class="row-title" data-i18n="service_fee_label">رسوم الخدمة</div><div class="row-value mono">${serviceFeePercent}%</div></div>
+                        <div class="list-row"><div class="row-title" data-i18n="vat_label">ضريبة القيمة المضافة (VAT)</div><div class="row-value mono">${vatPercent}%</div></div>
+                        <button class="btn btn-primary btn-sm btn-block" onclick="openFeesSettings()"><i class="fa-solid fa-pen"></i> ${t('edit_fees')}</button>
+                        
+                        <div class="section-title" data-i18n="menu_categories">📂 التصنيفات</div>
+                        <button class="btn btn-primary btn-sm" onclick="openCategorySheet()"><i class="fa-solid fa-plus"></i> إضافة تصنيف</button>
+                        <div class="panel" id="settingsCategoriesList"></div>
+                        
+                        <div class="section-title" data-i18n="manage_tables">🪑 إدارة الطاولات</div>
+                        <button class="btn btn-primary btn-sm" onclick="openTableManagementSheet()"><i class="fa-solid fa-plus"></i> ${t('add_table')}</button>
+                        <div class="panel" id="settingsTablesList"></div>
+                        
+                        <div class="section-title" data-i18n="payment_methods">💳 طرق الدفع</div>
+                        <button class="btn btn-primary btn-sm" onclick="openPaymentMethodSheet()"><i class="fa-solid fa-plus"></i> ${t('add')}</button>
+                        <div class="panel" id="settingsPaymentMethods"></div>
+                        
+                        <div class="section-title" data-i18n="employees">👥 الموظفين</div>
+                        <button class="btn btn-primary btn-sm" onclick="openEmployeeSheet()"><i class="fa-solid fa-plus"></i> ${t('add')}</button>
+                        <div class="panel" id="settingsEmployees"></div>
+                        
+                        <button class="btn btn-ghost btn-block" style="margin-top:16px;" onclick="switchBusiness()"><i class="fa-solid fa-right-left"></i> ${t('switch_business')}</button>`;
+
+    renderSettingsTables();
+    renderSettingsPaymentMethods();
+    renderSettingsEmployees();
+    renderMenuCategoriesList();
+}
+
+function renderSettingsTables() {
+    const el = document.getElementById('settingsTablesList');
+    if (tables.length === 0) {
+        el.innerHTML = `<div class="empty" style="padding:12px;">${t('no_tables')}</div>`;
+        return;
+    }
+    el.innerHTML = tables.map(table =>
+        `<div class="list-row">
+                            <div>
+                                <div class="row-title">${t('table')} #${table.number}</div>
+                                <div class="row-sub">${table.capacity || 4} ${t('persons')} · ${t(table.status)}</div>
+                            </div>
+                            <div class="row-actions">
+                                <button class="btn btn-ghost btn-xs" onclick="editTable('${table.id}')"><i class="fa-solid fa-pen"></i></button>
+                                <button class="btn btn-danger btn-xs" onclick="deleteTable('${table.id}')"><i class="fa-solid fa-trash"></i></button>
+                            </div>
+                        </div>`
+    ).join('');
+}
+
+function renderSettingsPaymentMethods() {
+    const el = document.getElementById('settingsPaymentMethods');
+    if (paymentMethods.length === 0) {
+        el.innerHTML = `<div class="empty" style="padding:12px;">${t('no_items')}</div>`;
+        return;
+    }
+    el.innerHTML = paymentMethods.slice(0, 3).map(pm =>
+        `<div class="list-row"><div><div class="row-title"><i class="fa-solid ${pm.icon}"></i> ${escapeHtml(pm.name)}</div></div></div>`
+    ).join('');
+}
+
+function renderSettingsEmployees() {
+    const el = document.getElementById('settingsEmployees');
+    if (employees.length === 0) {
+        el.innerHTML = `<div class="empty" style="padding:12px;">${t('no_items')}</div>`;
+        return;
+    }
+    el.innerHTML = employees.map(emp => {
+        const roleMap = { 'waiter': t('waiter'), 'chef': t('chef'), 'cashier': t('cashier'), 'admin': t('admin') };
+        const statusBadge = emp.is_active !== false ?
+            `<span class="badge badge-success">✅ ${t('active')}</span>` :
+            `<span class="badge badge-inactive">⛔ ${t('inactive')}</span>`;
+        return `<div class="list-row">
+                            <div>
+                                <div class="row-title">${escapeHtml(emp.name)}</div>
+                                <div class="row-sub">${roleMap[emp.role] || emp.role}</div>
+                            </div>
+                            <div class="row-actions">
+                                ${statusBadge}
+                                <button class="btn btn-ghost btn-xs" onclick="editEmployee('${emp.id}')"><i class="fa-solid fa-pen"></i></button>
+                                <button class="btn btn-danger btn-xs" onclick="deleteEmployee('${emp.id}')"><i class="fa-solid fa-trash"></i></button>
+                            </div>
+                        </div>`;
+    }).join('');
+}
+
+// ============================================================
+// SHIFT HISTORY (في الإعدادات)
+// ============================================================
+function renderShiftHistory() {
+    const el = document.getElementById('settingsShiftHistory');
+    if (!el) return;
+
+    if (!supabaseClient || !business) {
+        el.innerHTML = `<div class="empty" style="padding:12px;">${t('loading')}</div>`;
+        return;
+    }
+
+    try {
+        supabaseClient
+            .from('shifts')
+            .select('*')
+            .eq('business_id', business.id)
+            .eq('status', 'closed')
+            .order('closed_at', { ascending: false })
+            .limit(5)
+            .then(({ data: shifts, error }) => {
+                if (error) {
+                    console.error('Error fetching shift history:', error);
+                    el.innerHTML = `<div class="empty" style="padding:12px;">⚠️ حدث خطأ في تحميل سجل الشيفتات</div>`;
+                    return;
+                }
+
+                if (!shifts || shifts.length === 0) {
+                    el.innerHTML = `<div class="empty" style="padding:12px;">${t('no_shift_history')}</div>`;
+                    return;
+                }
+
+                el.innerHTML = shifts.map(shift => `
+                    <div class="list-row">
+                        <div>
+                            <div class="row-title">${new Date(shift.closed_at).toLocaleDateString('ar-EG')}</div>
+                            <div class="row-sub">${new Date(shift.closed_at).toLocaleTimeString('ar-EG')} · ${shift.closed_by || 'نظام'}</div>
+                        </div>
+                        <div>
+                            <div class="row-sub" style="color:var(--success);">💰 ${money(shift.total_revenue || 0)}</div>
+                            <div class="row-sub" style="color:var(--primary-dark);">📈 ${money(shift.total_profit || 0)}</div>
+                        </div>
+                    </div>
+                `).join('');
+            });
+    } catch (e) {
+        console.error('Error in renderShiftHistory:', e);
+        el.innerHTML = `<div class="empty" style="padding:12px;">⚠️ حدث خطأ في تحميل السجل</div>`;
+    }
+}
+
+// ============================================================
+// TABLE MANAGEMENT
+// ============================================================
+function openTableManagementSheet() {
+    document.getElementById('editTableId').value = '';
+    document.getElementById('editTableNumber').value = tables.length + 1;
+    document.getElementById('editTableCapacity').value = 4;
+    document.getElementById('editTableStatus').value = 'available';
+    document.getElementById('tableManagementTitle').textContent = t('add_table');
+    document.getElementById('deleteTableBtn').style.display = 'none';
+    document.getElementById('tableManagementError').textContent = '';
+    openSheet('tableManagementOverlay');
+}
+
+function editTable(tableId) {
+    const table = tables.find(t => t.id === tableId);
+    if (!table) return;
+    document.getElementById('editTableId').value = table.id;
+    document.getElementById('editTableNumber').value = table.number;
+    document.getElementById('editTableCapacity').value = table.capacity || 4;
+    document.getElementById('editTableStatus').value = table.status || 'available';
+    document.getElementById('tableManagementTitle').textContent = t('edit_table');
+    document.getElementById('deleteTableBtn').style.display = 'flex';
+    document.getElementById('tableManagementError').textContent = '';
+    openSheet('tableManagementOverlay');
+}
+
+async function saveTableManagement() {
+    const id = document.getElementById('editTableId').value;
+    const number = parseInt(document.getElementById('editTableNumber').value);
+    const capacity = parseInt(document.getElementById('editTableCapacity').value);
+    const status = document.getElementById('editTableStatus').value;
+    const errEl = document.getElementById('tableManagementError');
+
+    if (!number || number < 1) { errEl.textContent = t('error_general'); return; }
+    if (!supabaseClient) { errEl.textContent = t('error_connection'); return; }
+
+    try {
+        const data = { number, capacity, status };
+        if (id) {
+            await supabaseClient.from('tables').update(data).eq('id', id);
+            showToast(t('table_updated'), 'success');
+        } else {
+            data.business_id = business.id;
+            await supabaseClient.from('tables').insert(data);
+            showToast(t('table_added'), 'success');
+        }
+        closeSheet('tableManagementOverlay');
+        await loadTables();
+        renderTables();
+        renderSettings();
+        renderDashboard();
+    } catch (e) {
+        errEl.textContent = t('error_general');
+    }
+}
+
+async function deleteTableFromSheet() {
+    const id = document.getElementById('editTableId').value;
+    if (!id) return;
+    closeSheet('tableManagementOverlay');
+    await deleteTable(id);
+}
+
+async function deleteTable(tableId) {
+    if (!confirm(t('delete_table_confirm'))) return;
+    if (!supabaseClient) return;
+    try {
+        await supabaseClient.from('tables').delete().eq('id', tableId);
+        showToast(t('table_deleted'), 'success');
+        await loadTables();
+        renderTables();
+        renderSettings();
+        renderDashboard();
+    } catch (e) {
+        showToast(t('error_general'), 'error');
+    }
+}
+
+// ============================================================
+// SWITCH BUSINESS
+// ============================================================
 function switchBusiness() {
-    stopRealtimeAndTimers();
-    localStorage.removeItem('psr_business_code');
-    business = null; deviceRecord = null; currentUser = null;
+    stopRealtimeSync();
+    localStorage.removeItem('platepro_business_code');
+    localStorage.removeItem('platepro_logo');
+    business = null;
+    deviceRecord = null;
+    currentUser = null;
     document.getElementById('setupBusinessCode').value = '';
     showScreen('setupScreen');
 }
 
+// ============================================================
+// BIND EVENTS
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    document.getElementById('setupContinueBtn').addEventListener('click', handleSetupContinue);
+    document.getElementById('activateBtn').addEventListener('click', handleActivateDevice);
+    document.getElementById('backToSetupBtn').addEventListener('click', function() { showScreen('setupScreen'); });
+
+    document.getElementById('lockOwnerBtn').addEventListener('click', function() { selectLockRole('owner'); });
+    document.getElementById('lockEmployeeBtn').addEventListener('click', function() { selectLockRole('employee'); });
+    document.getElementById('unlockOwnerBtn').addEventListener('click', handleUnlock);
+    document.getElementById('unlockEmpBtn').addEventListener('click', handleEmployeeUnlock);
+    document.getElementById('resetLockBtn').addEventListener('click', resetLockRole);
+    document.getElementById('resetLockEmpBtn').addEventListener('click', resetLockRole);
+    document.getElementById('lockAppBtn').addEventListener('click', lockApp);
+
+    loadTheme();
+    loadFeesSettings();
+    loadLogo();
+    initCustomerPage();
+    tryAutoResume();
+});
+
 async function tryAutoResume() {
-    const code = localStorage.getItem('psr_business_code');
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('customer') === 'true') return; // رابط منيو العميل (QR) - متعملش auto-resume للمالك/الموظف
+
+    const code = localStorage.getItem('platepro_business_code');
     if (!code) return;
     try {
+        if (!supabaseClient) return;
         const { data: biz } = await supabaseClient.from('businesses').select('*').eq('code', code).single();
         if (!biz) return;
         business = biz;
@@ -379,4110 +4156,18 @@ async function tryAutoResume() {
         if (!dev) return;
         deviceRecord = dev;
         proceedToLock();
-    } catch (e) { console.warn('auto-resume failed', e); }
-}
-
-// ============================================================
-// AUTO-ACTIVATE FROM URL (?biz=CODE&code=ACTIVATION)
-// Used by the "start free trial" button on the marketing/dashboard
-// site, which creates a business + trial activation code and sends
-// the device straight here. Only runs for a device with no existing
-// saved session, so it never hijacks an already-installed device.
-// ============================================================
-async function tryAutoActivateFromURL() {
-    if (localStorage.getItem('psr_business_code')) return; // existing device — don't interfere
-    const params = new URLSearchParams(window.location.search);
-    const bizCode = params.get('biz');
-    const actCodeParam = params.get('code');
-    if (!bizCode) return;
-
-    // Clean the URL so a refresh/share doesn't re-trigger this.
-    window.history.replaceState({}, document.title, window.location.pathname);
-
-    const setupInput = document.getElementById('setupBusinessCode');
-    if (setupInput) setupInput.value = bizCode;
-    await handleSetupContinue();
-
-    // If handleSetupContinue routed us to the activation screen (new device)
-    // and we have an activation code, fill it in and submit automatically.
-    const activationScreen = document.getElementById('activationScreen');
-    if (actCodeParam && activationScreen && activationScreen.classList.contains('active')) {
-        const actInput = document.getElementById('activationCodeInput');
-        if (actInput) actInput.value = actCodeParam;
-        await handleActivateDevice();
-    }
-}
-
-window.addEventListener('DOMContentLoaded', async () => {
-    await tryAutoActivateFromURL();
-    tryAutoResume();
-});
-
-// ============================================================
-// MAIN APP ENTRY
-// ============================================================
-async function enterMainApp() {
-    document.getElementById('headerBizName').textContent = business.name;
-    document.getElementById('headerBizCode').textContent = business.code;
-    showScreen('mainApp');
-    applyPermissions();
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('view-dashboard').classList.add('active');
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === 'view-dashboard'));
-    
-    populateYearSelect();
-    // مبنعملهاش await عشان ملف الشبكة بتاعها (حتى لو بطيء) ميأخرش فتح
-    // التطبيق؛ بمجرد ما تخلص في الخلفية، بتحدّث الأرقام المعروضة تلقائيًا
-    syncServerClock().then(() => { renderStationsGrid(); });
-    await loadAllData();
-    subscribeRealtime();
-    startTicker();
-    updateTexts();
-    await recoverActiveSession();
-    // إعادة مزامنة الساعة كل 5 دقايق عشان نلحق أي انزياح لساعة الجهاز أثناء الاستخدام
-    setInterval(syncServerClock, 5 * 60 * 1000);
-}
-
-async function loadAllData() {
-    // Load each area independently. A problem in one table (for example,
-    // duplicate open shifts in an older database) must not prevent the
-    // stations and the rest of the app from rendering.
-    const results = await Promise.allSettled([
-        loadStations(),
-        loadMenuItems(),
-        loadEmployees(),
-        loadPaymentMethods(),
-        loadOrOpenShift()
-    ]);
-
-    results.forEach((result, index) => {
-        if (result.status === 'rejected') {
-            const names = ['stations', 'menu_items', 'employees', 'payment_methods', 'shift'];
-            console.error(`Failed to load ${names[index]}:`, result.reason);
-        }
-    });
-
-    renderDashboard();
-    renderStationsGrid();
-    renderSettingsStations();
-    renderSettingsPaymentMethods();
-}
-
-async function loadStations() {
-    assertBusinessContext();
-    const { data, error } = await supabaseClient.from('stations').select('*').eq('business_id', business.id).order('number');
-    if (error) {
-        console.error('Error loading stations:', error);
-        throw error;
-    }
-    if (Array.isArray(data) && data.length === 0) {
-        const seed = Array.from({ length: business.total_stations || 4 }, (_, i) => ({ 
-            business_id: business.id, number: i + 1, single_rate: 20, multi_rate: 30, name: `جهاز ${i + 1}`
-        }));
-        const createdResult = await dbResult(supabaseClient.from('stations').insert(seed).select(), 'Seeding stations');
-        stations = createdResult.data || [];
-    } else {
-        stations = data || [];
-    }
-    const activeResult = await dbResult(
-        supabaseClient.from('sessions').select('*').eq('business_id', business.id).eq('status', 'active'),
-        'Loading active sessions'
-    );
-    sessions = {};
-    (activeResult.data || []).forEach(s => { sessions[s.station_id] = s; });
-}
-
-// ============================================================
-// MENU ITEMS - with localStorage fallback
-// ============================================================
-async function loadMenuItems() {
-    try {
-        const { data, error } = await supabaseClient.from('menu_items').select('*').eq('business_id', business.id).eq('active', true).order('created_at');
-        if (error) {
-            console.warn('Error loading menu items from DB:', error);
-            const localData = localStorage.getItem('psr_menu_items_' + business.id);
-            if (localData) {
-                menuItems = JSON.parse(localData);
-                return;
-            }
-            menuItems = [];
-            return;
-        }
-        if (data) {
-            menuItems = data;
-            localStorage.setItem('psr_menu_items_' + business.id, JSON.stringify(data));
-        }
     } catch (e) {
-        console.warn('Error loading menu items:', e);
-        const localData = localStorage.getItem('psr_menu_items_' + business.id);
-        if (localData) {
-            menuItems = JSON.parse(localData);
-        } else {
-            menuItems = [];
-        }
-    }
-}
-
-async function saveMenuItemToDB(item) {
-    assertBusinessContext();
-    const { data, error } = await supabaseClient.from('menu_items').insert(item).select().single();
-    if (error) {
-        console.error('Error saving menu item to DB:', error);
-        throw error;
-    }
-    return data;
-}
-
-async function updateMenuItemInDB(id, updates) {
-    const { data, error } = await supabaseClient.from('menu_items').update(updates).eq('id', id).eq('business_id', business.id).select().single();
-    if (error) {
-        console.error('Error updating menu item in DB:', error);
-        throw error;
-    }
-    return data;
-}
-
-async function deleteMenuItemFromDB(id) {
-    const { error } = await supabaseClient.from('menu_items').delete().eq('id', id).eq('business_id', business.id);
-    if (error) {
-        console.error('Error deleting menu item from DB:', error);
-        throw error;
-    }
-    return true;
-}
-
-async function loadEmployees() {
-    const { data } = await supabaseClient.from('employees').select('*').eq('business_id', business.id).order('created_at');
-    employees = data || [];
-}
-
-async function loadPaymentMethods() {
-    try {
-        const { data, error } = await supabaseClient.from('payment_methods').select('*').eq('business_id', business.id).order('created_at');
-        if (error) throw error;
-        if (data && data.length > 0) {
-            paymentMethods = data;
-            return;
-        }
-    } catch (e) {
-        console.warn('Error loading payment methods:', e);
-    }
-    
-    const defaults = [
-        { business_id: business.id, name: 'كاش', icon: 'fa-money-bill-wave', color: 'badge-green', active: true },
-        { business_id: business.id, name: 'إنستا باي', icon: 'fa-mobile-screen-button', color: 'badge-purple', active: true },
-        { business_id: business.id, name: 'محفظة إلكترونية', icon: 'fa-wallet', color: 'badge-teal', active: true },
-        { business_id: business.id, name: 'بطاقة ائتمان', icon: 'fa-credit-card', color: 'badge-amber', active: true }
-    ];
-    
-    try {
-        const { data: created, error } = await supabaseClient.from('payment_methods').insert(defaults).select();
-        if (!error && created) {
-            paymentMethods = created;
-            return;
-        }
-    } catch (e) {
-        console.warn('Could not create default payment methods:', e);
-    }
-    
-    paymentMethods = defaults.map((pm, i) => ({
-        ...pm,
-        id: 'temp_' + Date.now() + '_' + i,
-        created_at: new Date().toISOString()
-    }));
-}
-
-async function loadOrOpenShift() {
-    assertBusinessContext();
-
-    // Do not use maybeSingle() here. The current database contains multiple
-    // open shifts for this business (the console reports 19 rows), so
-    // maybeSingle() throws PGRST116 and used to stop the whole app from rendering.
-    const { data: openShifts, error } = await supabaseClient
-        .from('shifts')
-        .select('*')
-        .eq('business_id', business.id)
-        .eq('status', 'open')
-        .order('opened_at', { ascending: false });
-
-    if (error) throw error;
-
-    if (openShifts && openShifts.length > 0) {
-        // Use the newest open shift for now. Do NOT automatically delete or
-        // close the other financial records; they need manual review.
-        currentShift = openShifts[0];
-
-        if (openShifts.length > 1) {
-            console.warn(
-                `PS Rental: ${openShifts.length} open shifts found for business ${business.id}. ` +
-                'Using the newest one. Review duplicate open shifts in Supabase.'
-            );
-        }
-        return;
-    }
-
-    const createdResult = await dbResult(
-        supabaseClient
-            .from('shifts')
-            .insert({ business_id: business.id, opened_at: new Date().toISOString(), status: 'open' })
-            .select()
-            .single(),
-        'Opening shift'
-    );
-    currentShift = createdResult.data;
-}
-
-// ============================================================
-// SESSION SEGMENTS HELPERS
-// ============================================================
-async function getSessionSegments(sessionId) {
-    if (sessionSegmentsCache[sessionId]) return sessionSegmentsCache[sessionId];
-    try {
-        const { data } = await supabaseClient
-            .from('session_segments')
-            .select('*')
-            .eq('session_id', sessionId)
-            .order('started_at', { ascending: true });
-        sessionSegmentsCache[sessionId] = data || [];
-        return data || [];
-    } catch (e) {
-        console.warn('Error loading segments:', e);
-        return [];
-    }
-}
-
-async function createSegment(sessionId, mode, startedAt, rate, timerType, durationSeconds) {
-    const { data: existingList } = await supabaseClient
-        .from('session_segments')
-        .select('*')
-        .eq('session_id', sessionId)
-        .is('ended_at', null)
-        .order('started_at', { ascending: false })
-        .limit(1);
-    const existing = (existingList && existingList[0]) || null;
-    if (existing) {
-        activeSegmentCache[sessionId] = existing;
-        return existing;
-    }
-
-    const { data, error } = await supabaseClient.from('session_segments').insert({
-        session_id: sessionId,
-        business_id: business.id,
-        mode: mode,
-        started_at: startedAt,
-        rate: assertPositiveNumber(rate, 'Rate'),
-        timer_type: timerType || 'countup',
-        duration_seconds: Math.max(0, Math.round(Number(durationSeconds) || 0))
-    }).select().single();
-    if (error) throw error;
-    sessionSegmentsCache[sessionId] = null;
-    activeSegmentCache[sessionId] = data;
-    return data;
-}
-
-async function closeSegment(segmentId, endedAt, amount) {
-    const { error } = await supabaseClient.from('session_segments')
-        .update({ ended_at: endedAt, amount: amount })
-        .eq('id', segmentId);
-    if (error) throw error;
-    sessionSegmentsCache = {};
-    for (const sid in activeSegmentCache) {
-        if (activeSegmentCache[sid] && activeSegmentCache[sid].id === segmentId) {
-            activeSegmentCache[sid] = null;
-        }
-    }
-}
-
-async function getActiveSegment(sessionId) {
-    try {
-        const { data } = await supabaseClient
-            .from('session_segments')
-            .select('*')
-            .eq('session_id', sessionId)
-            .is('ended_at', null)
-            .order('started_at', { ascending: false })
-            .limit(1);
-        const seg = (data && data[0]) || null;
-        activeSegmentCache[sessionId] = seg;
-        return seg;
-    } catch (e) {
-        console.warn('Error getting active segment:', e);
-        return activeSegmentCache[sessionId] || null;
-    }
-}
-
-function getActiveSegmentFast(sessionId) {
-    // ✅ لو الكاش فاضي أو null، نجيب من الداتابيز
-    if (!activeSegmentCache[sessionId]) {
-        return null;
-    }
-    return activeSegmentCache[sessionId];
-}
-
-// ============================================================
-// ✅ الدفعة المقدمة (Prepayment) — العميل يدفع قبل ما يقعد على
-// الجهاز، أو يزوّد الدفعة أثناء الجلسة. كل دفعة بتتسجل كصف مستقل
-// في session_prepayments (نفس فكرة session_segments/session_orders)
-// وبيتم جمعها وخصمها من الإجمالي في صفحة دفع نهاية الجلسة فقط.
-// ============================================================
-async function addPrepayment(sessionId, amount, note) {
-    assertBusinessContext();
-    const value = assertPositiveNumber(amount, 'Prepayment amount');
-    if (value <= 0) throw new Error('Prepayment amount must be greater than zero');
-
-    const { data, error } = await supabaseClient.from('session_prepayments').insert({
-        session_id: sessionId,
-        business_id: business.id,
-        amount: value,
-        note: note || null,
-        created_by_device: getDeviceId()
-    }).select().single();
-    if (error) throw error;
-
-    // ✅ إبطال الكاش عشان يتجاب تاني
-    sessionPrepaymentsCache[sessionId] = null;
-    
-    // ✅ تحديث واجهة الجلسة الحالية عشان تظهر الدفعة الجديدة
-    if (activeStationId && sessions[activeStationId] && sessions[activeStationId].id === sessionId) {
-        setTimeout(() => {
-            refreshStationSheetContent(activeStationId);
-        }, 300);
-    }
-    
-    return data;
-}
-
-async function getSessionPrepayments(sessionId) {
-    // ✅ لو في كاش، نجيب من الكاش
-    if (sessionPrepaymentsCache[sessionId] !== undefined && sessionPrepaymentsCache[sessionId] !== null) {
-        return sessionPrepaymentsCache[sessionId];
-    }
-    try {
-        const { data, error } = await supabaseClient
-            .from('session_prepayments')
-            .select('*')
-            .eq('session_id', sessionId)
-            .order('created_at', { ascending: true });
-        if (error) {
-            // لو الجدول لسه مش متعمل في قاعدة البيانات، منسيبش الشاشة تقفل
-            console.warn('session_prepayments unavailable:', error.message);
-            sessionPrepaymentsCache[sessionId] = [];
-            return [];
-        }
-        sessionPrepaymentsCache[sessionId] = data || [];
-        return sessionPrepaymentsCache[sessionId];
-    } catch (e) {
-        console.warn('Error loading prepayments:', e);
-        sessionPrepaymentsCache[sessionId] = [];
-        return [];
-    }
-}
-
-async function getPrepaidTotal(sessionId) {
-    const list = await getSessionPrepayments(sessionId);
-    const total = list.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-    return Math.round(total * 100) / 100;
-}
-
-// شاشة إضافة دفعة مقدمة أثناء الجلسة (زر "إضافة دفعة مقدمة")
-function openPrepaymentSheet(stationId) {
-    const session = sessions[stationId];
-    if (!session) {
-        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
-        return;
-    }
-    const body = document.getElementById('prepaymentSheetBody');
-    if (!body) return;
-
-    body.innerHTML = `
-        <div style="text-align:center;margin-bottom:12px;">
-            <div style="font-size:13px;color:var(--text-dim);">${t('إضافة دفعة مقدمة على الجلسة', 'Add a prepayment to this session')}</div>
-        </div>
-        <div class="field">
-            <label>${t('المبلغ (جنيه)', 'Amount (EGP)')}</label>
-            <input type="number" id="prepaymentAmountInput" class="mono" min="0.5" step="0.5" placeholder="0" autofocus>
-        </div>
-        <button class="btn btn-prepay btn-block" onclick="confirmAddPrepayment('${session.id}','${stationId}')">
-            <i class="fa-solid fa-check"></i> ${t('تأكيد الدفعة', 'Confirm Prepayment')}
-        </button>
-        <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeSheet('prepaymentOverlay')">${t('إلغاء', 'Cancel')}</button>
-        <div class="error-text" id="prepaymentError"></div>
-    `;
-    openSheet('prepaymentOverlay');
-}
-
-async function confirmAddPrepayment(sessionId, stationId) {
-    const input = document.getElementById('prepaymentAmountInput');
-    const errEl = document.getElementById('prepaymentError');
-    if (errEl) errEl.textContent = '';
-    const amount = parseFloat(input ? input.value : '');
-
-    if (!amount || amount <= 0) {
-        if (errEl) errEl.textContent = t('أدخل مبلغ صحيح أكبر من صفر', 'Enter a valid amount greater than zero');
-        return;
-    }
-
-    try {
-        await addPrepayment(sessionId, amount, t('أثناء الجلسة', 'During session'));
-        showToast(t('تم تسجيل الدفعة المقدمة', 'Prepayment recorded'), 'success');
-        closeSheet('prepaymentOverlay');
-        if (stationId) {
-            await refreshStationSheetContent(stationId);
-        }
-    } catch (e) {
-        console.error('Error adding prepayment:', e);
-        if (errEl) errEl.textContent = t('فشل تسجيل الدفعة، حاول تاني', 'Failed to save the prepayment, try again');
-    }
-}
-
-// ============================================================
-// ✅ CLOCK SYNC — تصحيح فرق ساعة الجهاز عن وقت السيرفر
-// المشكلة: كل جهاز (لابتوب/موبايل) بيحسب "الوقت المنقضي" بالمقارنة
-// بساعته المحلية هو. لو ساعة الموبايل متأخرة عن اللحظة اللي اتسجل
-// فيها started_at (اللي جت من جهاز تاني)، الفرق بيبقى سالب فيتقفل
-// على 00:00 ويفضل واقف. الحل: نجيب وقت حقيقي مرجعي مرة عند الدخول
-// ونحسب فرق ثابت (offset) ونستخدمه بدل ما نعتمد على ساعة الجهاز لوحدها.
-//
-// ملحوظة: بنجيب الوقت من محتوى الرد (JSON body) مش من الـ response
-// header، لإن المتصفح بيمنع قراءة هيدر Date في الطلبات cross-origin
-// إلا لو السيرفر يسمح بيه صراحة (Supabase مش بيسمح) — فالاعتماد على
-// الـ header كان بيرجع فاضي دايمًا والتصحيح مكانش بيشتغل فعليًا.
-// ============================================================
-let serverClockOffsetMs = 0;
-
-async function fetchWithTimeout(url, ms) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), ms);
-    try {
-        return await fetch(url, { signal: controller.signal });
-    } finally {
-        clearTimeout(timeoutId);
-    }
-}
-
-async function syncServerClock() {
-    // ✅ المصدر الأول (الأوثق): وقت Supabase بتاعنا نفسه عن طريق RPC
-    // ده بيعتمد على نفس الاتصال اللي التطبيق أصلاً بينجح يكلمه في كل حتة
-    // تانية (مش على API خارجي ممكن يتحجب من الشبكة/الإضافات زي worldtimeapi)
-    try {
-        const { data, error } = await supabaseClient.rpc('get_server_time');
-        if (!error && data) {
-            const serverTime = new Date(data).getTime();
-            if (!isNaN(serverTime)) {
-                serverClockOffsetMs = serverTime - Date.now();
-                return;
-            }
-        }
-    } catch (e) {
-        // متاح لو الدالة get_server_time لسه متعملتش في قاعدة البيانات، بنكمل على المصادر الاحتياطية
-    }
-    // مصدر احتياطي أول
-    try {
-        const res = await fetchWithTimeout('https://worldtimeapi.org/api/timezone/Etc/UTC', 4000);
-        const data = await res.json();
-        if (data && data.unixtime) {
-            serverClockOffsetMs = (data.unixtime * 1000) - Date.now();
-            return;
-        }
-    } catch (e) {
-        // متوقع لو الدومين ده محجوب على الشبكة الحالية، بنكمل على المصدر التاني
-    }
-    // مصدر احتياطي تاني
-    try {
-        const res = await fetchWithTimeout('https://timeapi.io/api/Time/current/zone?timeZone=UTC', 4000);
-        const data = await res.json();
-        if (data && data.dateTime) {
-            const serverTime = new Date(data.dateTime + 'Z').getTime();
-            if (!isNaN(serverTime)) serverClockOffsetMs = serverTime - Date.now();
-        }
-    } catch (e) {
-        // كل المصادر فشلت (غالباً الشبكة الحالية بتحجب الدومينات الخارجية دي) —
-        // بنسيب serverClockOffsetMs = 0 (يعتمد على ساعة الجهاز) من غير ما نضرب
-        // console.warn عشان ده سيناريو متوقع ومش خطأ حقيقي في التطبيق
-        console.info('Clock sync: using local device time (external time sources unreachable).');
-    }
-}
-
-function nowCorrected() {
-    return Date.now() + serverClockOffsetMs;
-}
-
-async function preloadActiveSegments(sessionIds) {
-    if (!sessionIds || sessionIds.length === 0) return;
-    try {
-        const { data } = await supabaseClient
-            .from('session_segments')
-            .select('*')
-            .in('session_id', sessionIds)
-            .is('ended_at', null);
-        (data || []).forEach(seg => { activeSegmentCache[seg.session_id] = seg; });
-    } catch (e) {
-        console.warn('Error preloading active segments:', e);
-    }
-}
-
-function calculateSegmentAmountFromTimes(startedAt, endedAt, rate) {
-    const start = new Date(startedAt);
-    const end = new Date(endedAt);
-    const hours = Math.max(0, (end - start) / 3600000);
-    return Math.round((hours * Number(rate)) * 100) / 100;
-}
-
-async function calculateTotalAmounts(sessionId) {
-    const segments = await getSessionSegments(sessionId);
-    let singleTotal = 0, multiTotal = 0, singleDuration = 0, multiDuration = 0;
-    
-    for (const seg of segments) {
-        if (seg.ended_at) {
-            const hours = (new Date(seg.ended_at) - new Date(seg.started_at)) / 3600000;
-            const amount = (seg.amount !== null && seg.amount !== undefined)
-                ? Number(seg.amount)
-                : Math.round((hours * Number(seg.rate)) * 100) / 100;
-            if (seg.mode === 'single') {
-                singleTotal += amount;
-                singleDuration += hours;
-            } else {
-                multiTotal += amount;
-                multiDuration += hours;
-            }
-        }
-    }
-    
-    const { data: orders } = await supabaseClient
-        .from('session_orders')
-        .select('quantity, unit_price')
-        .eq('session_id', sessionId);
-    const ordersTotal = (orders || []).reduce((sum, o) => sum + (Number(o.quantity) * Number(o.unit_price)), 0);
-    
-    // ✅ جلب الدفعات المقدمة من الكاش أو الداتابيز
-    let prepaidTotal = 0;
-    try {
-        prepaidTotal = await getPrepaidTotal(sessionId);
-    } catch (e) {
-        console.warn('Error getting prepaid total:', e);
-        prepaidTotal = 0;
-    }
-    
-    const grandTotal = Math.round((singleTotal + multiTotal + ordersTotal) * 100) / 100;
-    
-    return {
-        singleTotal: Math.round(singleTotal * 100) / 100,
-        multiTotal: Math.round(multiTotal * 100) / 100,
-        singleDuration: singleDuration,
-        multiDuration: multiDuration,
-        ordersTotal: ordersTotal,
-        prepaidTotal: prepaidTotal,
-        // الباقي على العميل بعد خصم أي دفعة مقدمة (قبل خصم أي discount هيتحسب في صفحة الدفع)
-        dueAfterPrepayment: Math.max(0, Math.round((grandTotal - prepaidTotal) * 100) / 100),
-        grandTotal: grandTotal
-    };
-}
-
-async function getCurrentSegmentEstimate(sessionId) {
-    const activeSeg = await getActiveSegment(sessionId);
-    if (!activeSeg) return { amount: 0, hours: 0, segment: null };
-    
-    const start = new Date(activeSeg.started_at);
-    const now = new Date(nowCorrected());
-    let hours = Math.max(0, (now - start) / 3600000);
-    let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-    
-    if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-        const elapsedSeconds = (now - start) / 1000;
-        const remainingSeconds = Math.max(0, activeSeg.duration_seconds - elapsedSeconds);
-        hours = remainingSeconds / 3600;
-        amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-    }
-    
-    return { amount, hours, segment: activeSeg };
-}
-
-// ============================================================
-// ⚡ نسخ سريعة (sync) بتحسب من بيانات اتجابت خلاص، من غير أي طلب شبكة إضافي
-// نفس الحسابات بالظبط بتاعة calculateTotalAmounts / getCurrentSegmentEstimate
-// بس من غير ما نضرب الداتابيز تاني على نفس المعلومة. مستخدمة في فتح/تحديث
-// شاشة الجهاز عشان تبقى سريعة الاستجابة حتى لو النت بطيء.
-// ============================================================
-function computeTotalsFromData(segments, orders, prepaidTotal) {
-    let singleTotal = 0, multiTotal = 0, singleDuration = 0, multiDuration = 0;
-
-    for (const seg of segments) {
-        if (seg.ended_at) {
-            const hours = (new Date(seg.ended_at) - new Date(seg.started_at)) / 3600000;
-            const amount = (seg.amount !== null && seg.amount !== undefined)
-                ? Number(seg.amount)
-                : Math.round((hours * Number(seg.rate)) * 100) / 100;
-            if (seg.mode === 'single') {
-                singleTotal += amount;
-                singleDuration += hours;
-            } else {
-                multiTotal += amount;
-                multiDuration += hours;
-            }
-        }
-    }
-
-    const ordersTotal = (orders || []).reduce((sum, o) => sum + (Number(o.quantity) * Number(o.unit_price)), 0);
-    const grandTotal = Math.round((singleTotal + multiTotal + ordersTotal) * 100) / 100;
-
-    return {
-        singleTotal: Math.round(singleTotal * 100) / 100,
-        multiTotal: Math.round(multiTotal * 100) / 100,
-        singleDuration: singleDuration,
-        multiDuration: multiDuration,
-        ordersTotal: ordersTotal,
-        prepaidTotal: prepaidTotal || 0,
-        dueAfterPrepayment: Math.max(0, Math.round((grandTotal - (prepaidTotal || 0)) * 100) / 100),
-        grandTotal: grandTotal
-    };
-}
-
-function computeSegmentEstimate(activeSeg) {
-    if (!activeSeg) return { amount: 0, hours: 0, segment: null };
-
-    const start = new Date(activeSeg.started_at);
-    const now = new Date(nowCorrected());
-    let hours = Math.max(0, (now - start) / 3600000);
-    let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-
-    if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-        const elapsedSeconds = (now - start) / 1000;
-        const remainingSeconds = Math.max(0, activeSeg.duration_seconds - elapsedSeconds);
-        hours = remainingSeconds / 3600;
-        amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-    }
-
-    return { amount, hours, segment: activeSeg };
-}
-
-function getCurrentSegmentEstimateFast(sessionId) {
-    const activeSeg = getActiveSegmentFast(sessionId);
-    if (!activeSeg) return { amount: 0, hours: 0, segment: null };
-
-    const start = new Date(activeSeg.started_at);
-    const now = new Date(nowCorrected());
-    let hours = Math.max(0, (now - start) / 3600000);
-    let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-
-    if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-        const elapsedSeconds = (now - start) / 1000;
-        const remainingSeconds = Math.max(0, activeSeg.duration_seconds - elapsedSeconds);
-        hours = remainingSeconds / 3600;
-        amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-    }
-
-    return { amount, hours, segment: activeSeg };
-}
-
-// قيمة الجزء الحالي المكتسبة فعليًا (على أساس الوقت المنقضي دايمًا، سواء تصاعدي أو تنازلي)
-// نفس المعادلة المستخدمة عند إغلاق الجزء فعليًا في calculateSegmentAmountFromTimes
-function getCurrentSegmentEarnedAmount(sessionId) {
-    const activeSeg = getActiveSegmentFast(sessionId);
-    if (!activeSeg) return 0;
-    const start = new Date(activeSeg.started_at);
-    const now = new Date(nowCorrected());
-    const hours = Math.max(0, (now - start) / 3600000);
-    return Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-}
-
-function getRemainingSeconds(segment) {
-    if (!segment || segment.timer_type !== 'countdown' || !segment.duration_seconds) return 0;
-    const start = new Date(segment.started_at);
-    const now = new Date(nowCorrected());
-    const elapsed = (now - start) / 1000;
-    return Math.max(0, segment.duration_seconds - elapsed);
-}
-
-function formatCountdown(seconds) {
-    if (seconds < 0) seconds = 0;
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return (h > 0 ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-}
-
-// ============================================================
-// REALTIME
-// ============================================================
-function subscribeRealtime() {
-    if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
-    realtimeChannel = supabaseClient.channel('biz-' + business.id)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'sessions', filter: 'business_id=eq.' + business.id }, handleSessionChange)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'session_orders', filter: 'business_id=eq.' + business.id }, handleOrderChange)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'stations', filter: 'business_id=eq.' + business.id }, handleStationChange)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'session_segments', filter: 'business_id=eq.' + business.id }, handleSegmentChange)
-        .subscribe();
-}
-
-function stopRealtimeAndTimers() {
-    if (realtimeChannel) { supabaseClient.removeChannel(realtimeChannel); realtimeChannel = null; }
-    if (tickInterval) { clearInterval(tickInterval); tickInterval = null; }
-    Object.keys(countdownTimers).forEach(key => {
-        if (countdownTimers[key]) clearInterval(countdownTimers[key]);
-        delete countdownTimers[key];
-    });
-}
-
-function handleSessionChange(payload) {
-    const row = payload.new && Object.keys(payload.new).length ? payload.new : payload.old;
-    if (!row) return;
-    if (payload.eventType === 'DELETE' || (payload.new && payload.new.status === 'completed')) {
-        delete sessions[row.station_id];
-        if (countdownTimers[row.station_id]) {
-            clearInterval(countdownTimers[row.station_id]);
-            delete countdownTimers[row.station_id];
-        }
-        renderDashboard();
-        if (document.getElementById('view-shift').classList.contains('active')) {
-            renderShiftView();
-        }
-    } else if (row.status === 'active') {
-        sessions[row.station_id] = payload.new;
-    }
-    renderStationsGrid();
-    if (document.getElementById('view-dashboard').classList.contains('active')) renderDashboard();
-    if (document.getElementById('view-shift').classList.contains('active')) renderShiftView();
-    if (activeStationId === row.station_id && !pendingSwitch && !endingSessionInProgress) openStationSheet(activeStationId);
-}
-
-function handleOrderChange(payload) {
-    const row = payload.new && Object.keys(payload.new).length ? payload.new : payload.old;
-    if (activeStationId && row && row.session_id === (sessions[activeStationId] || {}).id) renderStationOrdersSection();
-    refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
-}
-
-function handleStationChange() {
-    loadStations().then(() => {
-        renderStationsGrid();
-        renderSettingsStations();
-    });
-}
-
-function handleSegmentChange(payload) {
-    if (payload.new && payload.new.session_id) {
-        const row = payload.new;
-        sessionSegmentsCache[row.session_id] = null;
-        activeSegmentCache[row.session_id] = row.ended_at ? null : row;
-        if (activeStationId && !pendingSwitch && !endingSessionInProgress) {
-            const session = sessions[activeStationId];
-            if (session && session.id === row.session_id) {
-                openStationSheet(activeStationId);
-            }
-        }
-    }
-}
-
-// ============================================================
-// التيكر
-// ============================================================
-function startTicker() {
-    if (tickInterval) clearInterval(tickInterval);
-    tickInterval = setInterval(() => {
-        document.querySelectorAll('.station-timer[data-start]').forEach(el => {
-            const stationId = el.dataset.stationId;
-            const session = sessions[stationId];
-            if (!session) return;
-            const activeSeg = getActiveSegmentFast(session.id);
-            if (activeSeg && activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-                const remaining = getRemainingSeconds(activeSeg);
-                el.textContent = formatCountdown(remaining);
-                if (remaining < 300) {
-                    el.classList.add('countdown-warning');
-                } else {
-                    el.classList.remove('countdown-warning');
-                }
-                el.classList.add('countdown');
-            } else {
-                el.textContent = formatElapsed(new Date(el.dataset.start));
-                el.classList.remove('countdown', 'countdown-warning');
-            }
-        });
-
-        const timerEl = document.getElementById('activeSessionTimer');
-        if (timerEl && timerEl.dataset.start && activeStationId) {
-            const session = sessions[activeStationId];
-            if (session) {
-                const activeSeg = getActiveSegmentFast(session.id);
-                if (activeSeg && activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-                    const remaining = getRemainingSeconds(activeSeg);
-                    timerEl.textContent = formatCountdown(remaining);
-                    if (remaining < 300) {
-                        timerEl.classList.add('countdown-warning');
-                    } else {
-                        timerEl.classList.remove('countdown-warning');
-                    }
-                    timerEl.classList.add('countdown');
-                } else {
-                    timerEl.textContent = formatElapsed(new Date(timerEl.dataset.start));
-                    timerEl.classList.remove('countdown', 'countdown-warning');
-                }
-            }
-        }
-
-        const currentSegTimer = document.getElementById('currentSegTimer');
-        if (currentSegTimer && currentSegTimer.dataset.start && activeStationId) {
-            const session = sessions[activeStationId];
-            if (session) {
-                const activeSeg = getActiveSegmentFast(session.id);
-                if (activeSeg && activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-                    const remaining = getRemainingSeconds(activeSeg);
-                    currentSegTimer.textContent = formatCountdown(remaining);
-                } else {
-                    currentSegTimer.textContent = formatElapsed(new Date(currentSegTimer.dataset.start));
-                }
-            }
-        }
-
-        const amountEl = document.getElementById('currentSegAmount');
-        if (amountEl && activeStationId) {
-            const session = sessions[activeStationId];
-            if (session) {
-                const { amount } = getCurrentSegmentEstimateFast(session.id);
-                amountEl.textContent = moneyDec(amount);
-            }
-        }
-
-        const overallTotalEl = document.getElementById('overallTotalAmount');
-        if (overallTotalEl && activeStationId) {
-            const session = sessions[activeStationId];
-            if (session) {
-                const baseTotal = Number(overallTotalEl.dataset.baseTotal || 0);
-                const earnedNow = getCurrentSegmentEarnedAmount(session.id);
-                overallTotalEl.textContent = moneyDec(Math.round((baseTotal + earnedNow) * 100) / 100);
-            }
-        }
-    }, 1000);
-}
-
-function formatElapsed(start) {
-    const secs = Math.max(0, Math.floor((nowCorrected() - start.getTime()) / 1000));
-    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
-    return (h > 0 ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-}
-
-// ============================================================
-// DASHBOARD
-// ============================================================
-function updateStationTypeCounts() {
-    if (typeof stations === 'undefined' || !stations) return;
-
-    // ✅ فصل الأجهزة حسب النوع بالضبط
-    const billiardStations = stations.filter(st => st.station_type === 'billiard');
-    const playstationStations = stations.filter(st => st.station_type === 'playstation');
-    const drinksStations = stations.filter(st => st.station_type === 'drinks');
-
-    // ✅ إحصائيات البلياردو
-    const billiardOccupied = billiardStations.filter(st => sessions && sessions[st.id]).length;
-    const billiardAvailable = billiardStations.length - billiardOccupied;
-    
-    // ✅ إحصائيات البلايستيشن
-    const playstationOccupied = playstationStations.filter(st => sessions && sessions[st.id]).length;
-    const playstationAvailable = playstationStations.length - playstationOccupied;
-    
-    // ✅ إحصائيات المشروبات
-    const drinksOccupied = drinksStations.filter(st => sessions && sessions[st.id]).length;
-    const drinksAvailable = drinksStations.length - drinksOccupied;
-
-    // ✅ تحديث الـ DOM
-    const elBillAvail = document.getElementById('dashBilliardAvailable');
-    const elBillOcc = document.getElementById('dashBilliardOccupied');
-    const elPsAvail = document.getElementById('dashPlaystationAvailable');
-    const elPsOcc = document.getElementById('dashPlaystationOccupied');
-    const elDrinkAvail = document.getElementById('dashDrinksAvailable');
-    const elDrinkOcc = document.getElementById('dashDrinksOccupied');
-
-    if (elBillAvail) elBillAvail.textContent = billiardAvailable;
-    if (elBillOcc) elBillOcc.textContent = billiardOccupied;
-    if (elPsAvail) elPsAvail.textContent = playstationAvailable;
-    if (elPsOcc) elPsOcc.textContent = playstationOccupied;
-    if (elDrinkAvail) elDrinkAvail.textContent = drinksAvailable;
-    if (elDrinkOcc) elDrinkOcc.textContent = drinksOccupied;
-}
-
-async function renderDashboard() {
-    updateStationTypeCounts();
-    if (!currentShift) {
-        try {
-            const { data: created } = await supabaseClient.from('shifts').insert({ 
-                business_id: business.id,
-                opened_at: new Date().toISOString(),
-                status: 'open'
-            }).select().single();
-            if (created) {
-                currentShift = created;
-                showToast(t('تم فتح شيفت جديد تلقائياً', 'New shift opened automatically'), 'success');
-            }
-        } catch (e) {
-            console.error('Error auto-opening shift:', e);
-            document.getElementById('dashRevenue').textContent = '0';
-            document.getElementById('dashExpenses').textContent = '0';
-            document.getElementById('dashActive').textContent = Object.keys(sessions).length;
-            document.getElementById('dashAvailable').textContent = stations.length - Object.keys(sessions).length;
-            return;
-        }
-    }
-    
-    if (!currentShift) {
-        document.getElementById('dashRevenue').textContent = '0';
-        document.getElementById('dashExpenses').textContent = '0';
-        document.getElementById('dashActive').textContent = Object.keys(sessions).length;
-        document.getElementById('dashAvailable').textContent = stations.length - Object.keys(sessions).length;
-        return;
-    }
-    
-    try {
-        const { data: completedSessions } = await supabaseClient
-            .from('sessions')
-            .select('id, amount')
-            .eq('business_id', business.id)
-            .eq('status', 'completed')
-            .gte('ended_at', currentShift.opened_at)
-            .lte('ended_at', currentShift.closed_at || new Date().toISOString());
-        
-        let totalRevenue = 0;
-        const sessionIds = (completedSessions || []).map(s => s.id);
-        
-        if (sessionIds.length > 0) {
-            const { data: segments } = await supabaseClient
-                .from('session_segments')
-                .select('session_id, amount')
-                .in('session_id', sessionIds);
-            
-            const { data: orders } = await supabaseClient
-                .from('session_orders')
-                .select('session_id, quantity, unit_price')
-                .in('session_id', sessionIds);
-            
-            for (const session of completedSessions) {
-                let sessionRevenue = Number(session.amount) || 0;
-                
-                if (sessionRevenue === 0) {
-                    const segAmount = (segments || [])
-                        .filter(s => s.session_id === session.id)
-                        .reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
-                    
-                    const orderAmount = (orders || [])
-                        .filter(o => o.session_id === session.id)
-                        .reduce((sum, o) => sum + (Number(o.quantity) * Number(o.unit_price)), 0);
-                    
-                    sessionRevenue = segAmount + orderAmount;
-                }
-                
-                totalRevenue += sessionRevenue;
-            }
-        }
-        
-        const { data: expensesData } = await supabaseClient
-            .from('expenses')
-            .select('amount')
-            .eq('shift_id', currentShift.id);
-        const totalExpenses = (expensesData || []).reduce((sum, e) => sum + Number(e.amount), 0);
-        
-        document.getElementById('dashRevenue').textContent = money(Math.round(totalRevenue * 100) / 100);
-        document.getElementById('dashExpenses').textContent = money(Math.round(totalExpenses * 100) / 100);
-        document.getElementById('dashActive').textContent = Object.keys(sessions).length;
-        document.getElementById('dashAvailable').textContent = stations.length - Object.keys(sessions).length;
-    } catch (e) {
-        console.error('Error rendering dashboard:', e);
-        document.getElementById('dashRevenue').textContent = '0';
-        document.getElementById('dashExpenses').textContent = '0';
-        document.getElementById('dashActive').textContent = Object.keys(sessions).length;
-        document.getElementById('dashAvailable').textContent = stations.length - Object.keys(sessions).length;
-    }
-}
-
-// ============================================================
-// STATIONS
-// ============================================================
-function renderStationsGrid() {
-    updateStationTypeCounts();
-    const grid = document.getElementById('stationsGrid');
-    grid.innerHTML = stations.map(st => {
-        const s = sessions[st.id];
-        const occupied = !!s;
-        const statusText = occupied ? t('شغال', 'Active') : t('متاح', 'Available');
-        const displayName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
-        let modeBadge = '';
-        let timerBadge = '';
-        let timerDisplay = '';
-        let ordersSummaryDisplay = '';
-        
-        const isDrinksStation = st.station_type === 'drinks';
-
-        if (occupied) {
-            if (isDrinksStation) {
-                modeBadge = `<span class="badge badge-teal" style="font-size:9px;padding:1px 8px;">${t('طلبات فقط', 'Orders Only')}</span>`;
-                const summaryLines = getStationOrdersSummaryLines(s.id);
-                ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}">${buildOrdersSummaryHtml(summaryLines)}</div>`;
-            } else {
-                const mode = s.current_mode || 'single';
-                const modeLabel = mode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
-                const badgeClass = mode === 'single' ? 'badge-mode-single' : 'badge-mode-multi';
-                modeBadge = `<span class="badge ${badgeClass}" style="font-size:9px;padding:1px 8px;">${modeLabel}</span>`;
-
-                const timerType = s.timer_type || 'countup';
-                const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
-                const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
-                timerBadge = `<span class="badge ${timerBadgeClass}" style="font-size:8px;padding:1px 6px;">${timerLabel}</span>`;
-
-                timerDisplay = `<div class="station-timer mono" data-start="${s.started_at}" data-station-id="${st.id}" data-timer-type="${timerType}">${formatElapsed(new Date(s.started_at))}</div>`;
-
-                const summaryLines = getStationOrdersSummaryLines(s.id);
-                ordersSummaryDisplay = `<div class="station-orders-summary" id="stationOrdersSummary-${st.id}">${buildOrdersSummaryHtml(summaryLines)}</div>`;
-            }
-        } else {
-            timerDisplay = isDrinksStation
-                ? `<div class="station-rate">${t('ترابيزة مشروبات — طلبات فقط', 'Drinks table — orders only')}</div>`
-                : `<div class="station-rate">${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}</div>`;
-        }
-        
-        return `<div class="station-card ${occupied ? 'occupied' : ''}" onclick="openStationSheet('${st.id}')">
-            <div><div class="station-num">${displayName}</div><div class="station-status">${statusText} ${modeBadge} ${timerBadge}</div></div>
-            ${timerDisplay}
-            ${ordersSummaryDisplay}
-        </div>`;
-    }).join('');
-
-    refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
-}
-
-// ============================================================
-// STATION CARD — ORDERS SUMMARY (ملخص الطلبات جوه كارت الجهاز)
-// ============================================================
-async function refreshStationOrdersCache() {
-    const sessionIds = Object.values(sessions).map(s => s && s.id).filter(Boolean);
-    if (sessionIds.length === 0) {
-        stationOrdersCache = {};
-        return;
-    }
-    try {
-        const { data, error } = await supabaseClient
-            .from('session_orders')
-            .select('session_id, item_name, quantity')
-            .in('session_id', sessionIds);
-        if (error) throw error;
-        const grouped = {};
-        (data || []).forEach(o => {
-            if (!grouped[o.session_id]) grouped[o.session_id] = [];
-            grouped[o.session_id].push(o);
-        });
-        stationOrdersCache = grouped;
-    } catch (e) {
-        console.warn('Error loading station orders summary:', e);
-    }
-}
-
-function getStationOrdersSummaryLines(sessionId) {
-    const orders = stationOrdersCache[sessionId];
-    if (!orders || orders.length === 0) return [];
-    return orders.map(o => ({ name: o.item_name, qty: o.quantity }));
-}
-
-function buildOrdersSummaryHtml(lines) {
-    // ✅ اسم الصنف والكمية بيتكتبوا في عنصرين منفصلين (مش نص واحد مخلوط)
-    // عشان منتظمش في مشكلة اتجاه النص (bidi) اللي بتحصل لما نخلط عربي بأرقام/× في سطر واحد
-    return lines.map(l => `<div class="station-orders-summary-item">
-        <span class="station-orders-summary-name">${escapeHtml(l.name)}</span>
-        <span class="station-orders-summary-qty" dir="ltr">×${escapeHtml(String(l.qty))}</span>
-    </div>`).join('');
-}
-
-function updateStationOrdersSummaryDOM() {
-    stations.forEach(st => {
-        const s = sessions[st.id];
-        const el = document.getElementById(`stationOrdersSummary-${st.id}`);
-        if (!el) return;
-        const lines = s ? getStationOrdersSummaryLines(s.id) : [];
-        el.innerHTML = buildOrdersSummaryHtml(lines);
-    });
-}
-
-// ============================================================
-// STATION MANAGEMENT (Settings)
-// ============================================================
-let settingsStationsExpanded = false;
-
-function toggleSettingsStations() {
-    settingsStationsExpanded = !settingsStationsExpanded;
-    document.getElementById('settingsStations').style.display = settingsStationsExpanded ? 'block' : 'none';
-    document.getElementById('settingsStationsChevron').style.transform = settingsStationsExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
-}
-
-// ============================================================
-// BULK RATE
-// ============================================================
-async function applyBulkRate(type) {
-    const singleInput = document.getElementById('bulkSingleRateInput');
-    const multiInput = document.getElementById('bulkMultiRateInput');
-    
-    let rate, fieldName, typeLabel;
-    if (type === 'single') {
-        rate = parseFloat(singleInput.value);
-        fieldName = 'single_rate';
-        typeLabel = 'Single';
-        if (isNaN(rate) || rate < 0) {
-            showToast(t('اكتب سعر Single صحيح', 'Enter a valid Single price'), 'error');
-            return;
-        }
-    } else {
-        rate = parseFloat(multiInput.value);
-        fieldName = 'multi_rate';
-        typeLabel = 'Multi';
-        if (isNaN(rate) || rate < 0) {
-            showToast(t('اكتب سعر Multi صحيح', 'Enter a valid Multi price'), 'error');
-            return;
-        }
-    }
-    
-    if (!stations || stations.length === 0) {
-        showToast(t('مفيش أجهزة عشان تتحدث', 'No devices to update'), 'error');
-        return;
-    }
-    
-    if (!confirm(t(`هل أنت متأكد من تثبيت سعر ${rate} ج/ساعة لـ ${typeLabel} لكل الأجهزة (${stations.length})؟`, `Set ${rate} EGP/hr for ${typeLabel} on all ${stations.length} devices?`))) return;
-
-    try {
-        const updateData = {};
-        updateData[fieldName] = rate;
-        
-        const { data, error } = await supabaseClient
-            .from('stations')
-            .update(updateData)
-            .eq('business_id', business.id)
-            .select();
-
-        if (error) {
-            showToast(t('فشل تحديث السعر: ' + error.message, 'Failed to update price: ' + error.message), 'error');
-            console.error('Error bulk-updating rates:', error);
-            return;
-        }
-        if (!data || data.length === 0) {
-            console.error('Bulk rate update affected 0 rows — check RLS UPDATE policy on "stations" table.');
-            showToast(t('فشل تحديث السعر: قاعدة البيانات رفضت الحفظ (تحقق من صلاحيات RLS على جدول stations)', 'Failed to update price: database rejected the save (check RLS permissions on the stations table)'), 'error');
-            return;
-        }
-
-        if (type === 'single') {
-            singleInput.value = '';
-        } else {
-            multiInput.value = '';
-        }
-        
-        showToast(t(`اتحدث سعر ${typeLabel} لكل الأجهزة`, `${typeLabel} price updated for all devices`), 'success');
-        await loadStations();
-        renderSettingsStations();
-        renderStationsGrid();
-    } catch (e) {
-        console.error('Error applying bulk rate:', e);
-        showToast(t('حصل خطأ، حاول تاني.', 'Error, try again.'), 'error');
-    }
-}
-
-function renderSettingsStations() {
-    const el = document.getElementById('settingsStations');
-    const countEl = document.getElementById('settingsStationsCount');
-    if (countEl) countEl.textContent = stations && stations.length ? `(${stations.length})` : '';
-    if (!stations || stations.length === 0) {
-        el.innerHTML = `<div class="empty"><i class="fa-solid fa-gamepad"></i>${t('مفيش أجهزة — ضيف أول جهاز', 'No devices — add your first device')}</div>`;
-        return;
-    }
-    el.innerHTML = stations.map(st => {
-        const displayName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
-        const subLabel = st.station_type === 'drinks'
-            ? t('طلبات فقط (بدون وقت)', 'Orders only (no timer)')
-            : `${st.station_type === 'billiard' ? t('بلياردو', 'Billiard') : t('بلايستيشن', 'PlayStation')} — ${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}`;
-        return `<div class="list-row">
-            <div><div class="row-title">${escapeHtml(displayName)}</div><div class="row-sub">${t('رقم', 'No.')} ${st.number} — ${subLabel}</div></div>
-            <div class="row-actions">
-                <button class="btn btn-ghost btn-sm" onclick="editStation('${st.id}')"><i class="fa-solid fa-pen"></i></button>
-                <button class="btn btn-danger-sm" onclick="deleteStationById('${st.id}')"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>`;
-    }).join('');
-}
-
-function selectStationType(type) {
-    const classForType = { billiard: 'selected-single', playstation: 'selected-purple', drinks: 'selected-multi' };
-    document.querySelectorAll('#stationTypeSelector .mode-option').forEach(el => {
-        el.classList.remove('selected-single', 'selected-multi', 'selected-purple');
-        if (el.dataset.stationType === type) {
-            el.classList.add(classForType[type] || 'selected-single');
-        }
-    });
-    document.getElementById('stationManageType').value = type;
-    const rateFields = document.getElementById('stationRateFields');
-    if (rateFields) rateFields.style.display = type === 'drinks' ? 'none' : 'block';
-}
-
-function openStationManagementSheet() {
-    document.getElementById('stationManageId').value = '';
-    document.getElementById('stationManageNumber').value = stations.length + 1;
-    document.getElementById('stationManageName').value = '';
-    document.getElementById('stationManageSingleRate').value = '20';
-    document.getElementById('stationManageMultiRate').value = '30';
-    document.getElementById('stationDeleteBtn').style.display = 'none';
-    document.getElementById('stationManageError').textContent = '';
-    document.getElementById('stationManagementTitle').textContent = t('إضافة جهاز', 'Add Device');
-    selectStationType('billiard');
-    openSheet('stationManagementOverlay');
-}
-
-function editStation(stationId) {
-    const st = stations.find(s => s.id === stationId);
-    if (!st) return;
-    document.getElementById('stationManageId').value = st.id;
-    document.getElementById('stationManageNumber').value = st.number;
-    document.getElementById('stationManageName').value = st.name || '';
-    document.getElementById('stationManageSingleRate').value = st.single_rate || 20;
-    document.getElementById('stationManageMultiRate').value = st.multi_rate || 30;
-    document.getElementById('stationDeleteBtn').style.display = 'flex';
-    document.getElementById('stationManageError').textContent = '';
-    document.getElementById('stationManagementTitle').textContent = t('تعديل جهاز', 'Edit Device');
-    selectStationType(st.station_type === 'drinks' ? 'drinks' : (st.station_type === 'billiard' ? 'billiard' : 'playstation'));
-    openSheet('stationManagementOverlay');
-}
-
-async function submitStationManagement() {
-    const id = document.getElementById('stationManageId').value;
-    const number = parseInt(document.getElementById('stationManageNumber').value);
-    const name = document.getElementById('stationManageName').value.trim();
-    const rawType = document.getElementById('stationManageType').value;
-    const stationType = rawType === 'drinks' ? 'drinks' : (rawType === 'playstation' ? 'playstation' : 'billiard');
-    const isDrinks = stationType === 'drinks';
-    const singleRate = isDrinks ? 0 : parseFloat(document.getElementById('stationManageSingleRate').value);
-    const multiRate = isDrinks ? 0 : parseFloat(document.getElementById('stationManageMultiRate').value);
-    const errEl = document.getElementById('stationManageError');
-    errEl.textContent = '';
-
-    if (!number || number < 1) { errEl.textContent = t('رقم الجهاز مطلوب.', 'Device number is required.'); return; }
-    if (!isDrinks) {
-        if (isNaN(singleRate) || singleRate < 0) { errEl.textContent = t('سعر Single مطلوب.', 'Single rate is required.'); return; }
-        if (isNaN(multiRate) || multiRate < 0) { errEl.textContent = t('سعر Multi مطلوب.', 'Multi rate is required.'); return; }
-    }
-
-    if (!id && stations.some(s => s.number === number)) {
-        errEl.textContent = t('رقم الجهاز مستخدم بالفعل.', 'Device number already exists.');
-        return;
-    }
-
-    try {
-        if (id) {
-            const { error } = await supabaseClient.from('stations').update({ number, name, single_rate: singleRate, multi_rate: multiRate, station_type: stationType }).eq('id', id).eq('business_id', business.id);
-            if (error) throw error;
-            showToast(t('تم تحديث الجهاز', 'Device updated'), 'success');
-        } else {
-            const { error } = await supabaseClient.from('stations').insert({ business_id: business.id, number, name, single_rate: singleRate, multi_rate: multiRate, station_type: stationType });
-            if (error) throw error;
-            showToast(t('تم إضافة الجهاز', 'Device added'), 'success');
-        }
-        closeSheet('stationManagementOverlay');
-        await loadStations();
-        renderStationsGrid();
-        renderSettingsStations();
-        renderDashboard();
-    } catch (e) {
-        errEl.textContent = t('حصل خطأ: ' + (e.message || e), 'Error: ' + (e.message || e));
-        console.error(e);
-    }
-}
-
-async function deleteStationById(stationId) {
-    if (!confirm(t('هل أنت متأكد من حذف هذا الجهاز؟', 'Are you sure you want to delete this device?'))) return;
-
-    if (sessions[stationId]) {
-        showToast(t('لا يمكن حذف جهاز عليه جلسة شغالة.', 'Cannot delete a device with an active session.'), 'error');
-        return;
-    }
-
-    try {
-        const { error } = await supabaseClient.from('stations').delete().eq('id', stationId).eq('business_id', business.id);
-        if (error) throw error;
-        showToast(t('تم حذف الجهاز', 'Device deleted'), 'success');
-        await loadStations();
-        renderStationsGrid();
-        renderSettingsStations();
-        renderDashboard();
-    } catch (e) {
-        showToast(t('فشل الحذف، حاول تاني.', 'Delete failed, try again.'), 'error');
-        console.error(e);
-    }
-}
-
-async function deleteStation() {
-    const id = document.getElementById('stationManageId').value;
-    if (!id) return;
-    closeSheet('stationManagementOverlay');
-    await deleteStationById(id);
-}
-
-// ============================================================
-// PAYMENT METHODS (Settings)
-// ============================================================
-function renderSettingsPaymentMethods() {
-    const el = document.getElementById('settingsPaymentMethods');
-    if (!paymentMethods || paymentMethods.length === 0) {
-        el.innerHTML = `<div class="empty"><i class="fa-solid fa-credit-card"></i>${t('مفيش طرق دفع — ضيف أول طريقة', 'No payment methods — add your first method')}</div>`;
-        return;
-    }
-    el.innerHTML = paymentMethods.map(pm => {
-        const colorMap = {
-            'badge-teal': 'var(--teal)',
-            'badge-amber': 'var(--amber)',
-            'badge-green': 'var(--green)',
-            'badge-purple': 'var(--purple)',
-            'badge-red': 'var(--red)'
-        };
-        const color = colorMap[pm.color] || 'var(--text)';
-        return `<div class="list-row">
-            <div><div class="row-title"><i class="fa-solid ${pm.icon}" style="color:${color};width:20px;"></i> ${escapeHtml(pm.name)}</div>
-            <div class="row-sub">${pm.active ? t('مفعل', 'Active') : t('غير مفعل', 'Inactive')}</div></div>
-            <div class="row-actions">
-                <button class="btn btn-ghost btn-sm" onclick="editPaymentMethod('${pm.id}')"><i class="fa-solid fa-pen"></i></button>
-                <button class="btn btn-danger-sm" onclick="deletePaymentMethodById('${pm.id}')"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>`;
-    }).join('');
-}
-
-function openPaymentMethodSheet() {
-    document.getElementById('paymentMethodId').value = '';
-    document.getElementById('paymentMethodName').value = '';
-    document.getElementById('paymentMethodIcon').value = 'fa-money-bill-wave';
-    document.getElementById('paymentMethodColor').value = 'badge-green';
-    document.getElementById('paymentMethodActive').checked = true;
-    document.getElementById('paymentDeleteBtn').style.display = 'none';
-    document.getElementById('paymentMethodError').textContent = '';
-    document.getElementById('paymentMethodTitle').textContent = t('إضافة طريقة دفع', 'Add Payment Method');
-    openSheet('paymentMethodOverlay');
-}
-
-function editPaymentMethod(pmId) {
-    const pm = paymentMethods.find(p => p.id === pmId);
-    if (!pm) return;
-    document.getElementById('paymentMethodId').value = pm.id;
-    document.getElementById('paymentMethodName').value = pm.name;
-    document.getElementById('paymentMethodIcon').value = pm.icon || 'fa-money-bill-wave';
-    document.getElementById('paymentMethodColor').value = pm.color || 'badge-green';
-    document.getElementById('paymentMethodActive').checked = pm.active !== false;
-    document.getElementById('paymentDeleteBtn').style.display = 'flex';
-    document.getElementById('paymentMethodError').textContent = '';
-    document.getElementById('paymentMethodTitle').textContent = t('تعديل طريقة دفع', 'Edit Payment Method');
-    openSheet('paymentMethodOverlay');
-}
-
-async function submitPaymentMethod() {
-    const id = document.getElementById('paymentMethodId').value;
-    const name = document.getElementById('paymentMethodName').value.trim();
-    const icon = document.getElementById('paymentMethodIcon').value;
-    const color = document.getElementById('paymentMethodColor').value;
-    const active = document.getElementById('paymentMethodActive').checked;
-    const errEl = document.getElementById('paymentMethodError');
-    errEl.textContent = '';
-
-    if (!name) { errEl.textContent = t('اسم طريقة الدفع مطلوب.', 'Payment method name is required.'); return; }
-
-    try {
-        if (id) {
-            await supabaseClient.from('payment_methods').update({ name, icon, color, active }).eq('id', id);
-            showToast(t('تم تحديث طريقة الدفع', 'Payment method updated'), 'success');
-        } else {
-            await supabaseClient.from('payment_methods').insert({ business_id: business.id, name, icon, color, active });
-            showToast(t('تم إضافة طريقة الدفع', 'Payment method added'), 'success');
-        }
-        closeSheet('paymentMethodOverlay');
-        await loadPaymentMethods();
-        renderSettingsPaymentMethods();
-    } catch (e) {
-        errEl.textContent = t('حصل خطأ، حاول تاني.', 'Error, try again.');
-        console.error(e);
-    }
-}
-
-async function deletePaymentMethodById(pmId) {
-    if (!confirm(t('هل أنت متأكد من حذف طريقة الدفع هذه؟', 'Are you sure you want to delete this payment method?'))) return;
-    try {
-        await supabaseClient.from('payment_methods').delete().eq('id', pmId);
-        showToast(t('تم حذف طريقة الدفع', 'Payment method deleted'), 'success');
-        await loadPaymentMethods();
-        renderSettingsPaymentMethods();
-    } catch (e) {
-        showToast(t('فشل الحذف، حاول تاني.', 'Delete failed, try again.'), 'error');
-        console.error(e);
-    }
-}
-
-async function deletePaymentMethod() {
-    const id = document.getElementById('paymentMethodId').value;
-    if (!id) return;
-    closeSheet('paymentMethodOverlay');
-    await deletePaymentMethodById(id);
-}
-
-// ============================================================
-// ORDER FUNCTIONS
-// ============================================================
-async function addOrderItem(sessionId, menuItemId) {
-    const item = menuItems.find(m => String(m.id) === String(menuItemId));
-    if (!item) {
-        showToast(t('الصنف غير موجود', 'Item not found'), 'error');
-        return;
-    }
-
-    sessionId = sessionId ||
-        currentOrderSessionId ||
-        (activeStationId && sessions[activeStationId] ? sessions[activeStationId].id : '');
-
-    if (!sessionId) {
-        console.error('No active session ID', {
-            activeStationId,
-            currentOrderSessionId,
-            stationSession: activeStationId ? sessions[activeStationId] : null
-        });
-        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
-        return;
-    }
-
-    try {
-        const existing = activeSessionOrders.find(
-            o => String(o.menu_item_id) === String(menuItemId)
-        );
-
-        if (existing) {
-            const { error } = await supabaseClient
-                .from('session_orders')
-                .update({ quantity: Number(existing.quantity || 0) + 1 })
-                .eq('id', existing.id);
-
-            if (error) throw error;
-        } else {
-            // IMPORTANT:
-            // Do NOT use .select().single() here.
-            // If INSERT is allowed by RLS but SELECT is not,
-            // .insert().select().single() reports a false failure.
-            //
-            // We also send business_id when the column exists in the
-            // current V2 schema. If an older database does not have it,
-            // retry once without business_id.
-            let insertPayload = {
-                business_id: business.id,
-                session_id: sessionId,
-                menu_item_id: item.id,
-                item_name: item.name,
-                unit_price: Number(item.price),
-                quantity: 1
-            };
-
-            let { error } = await supabaseClient
-                .from('session_orders')
-                .insert(insertPayload);
-
-            if (error && (
-                error.code === '42703' ||
-                /business_id/i.test(error.message || '') &&
-                /column/i.test(error.message || '')
-            )) {
-                delete insertPayload.business_id;
-
-                ({ error } = await supabaseClient
-                    .from('session_orders')
-                    .insert(insertPayload));
-            }
-
-            if (error) throw error;
-        }
-
-        // Reload from DB so the UI has the real row/id.
-        const { data: refreshedOrders, error: reloadError } = await supabaseClient
-            .from('session_orders')
-            .select('*')
-            .eq('session_id', sessionId)
-            .order('created_at');
-
-        if (reloadError) {
-            // The insert succeeded, but the current RLS SELECT policy
-            // may prevent reading the row back. Do not claim INSERT failed.
-            console.error('Order was inserted, but reload failed:', reloadError);
-            showToast(
-                t('تم حفظ الطلب، لكن صلاحية قراءة الطلبات تحتاج مراجعة في Supabase.', 'Order was saved, but the SELECT permission for orders needs review in Supabase.'),
-                'warning'
-            );
-        } else {
-            activeSessionOrders = refreshedOrders || [];
-        }
-
-        // ✅ حدّث ملخص الطلبات في كارت الجهاز فورًا من غير ما ننتظر الـ realtime
-        stationOrdersCache[sessionId] = activeSessionOrders;
-        updateStationOrdersSummaryDOM();
-
-        renderStationOrdersSection();
-
-        const totals = await calculateTotalAmounts(sessionId);
-        const totalEl = document.getElementById('overallTotalAmount');
-        if (totalEl) {
-            totalEl.textContent = moneyDec(totals.grandTotal);
-        }
-
-        if (!reloadError) {
-            showToast(t('تم إضافة الطلب', 'Order added'), 'success');
-        }
-
-    } catch (e) {
-        console.error('Error adding order:', e);
-
-        const code = e?.code || '';
-        const message = e?.message || String(e);
-
-        let userMessage = t('فشل إضافة الطلب', 'Failed to add order');
-
-        if (code === '23503') {
-            userMessage = t(
-                'فشل الطلب: الصنف أو الجلسة غير موجودة في قاعدة البيانات.',
-                'Order failed: the item or session does not exist in the database.'
-            );
-        } else if (code === '42501') {
-            userMessage = t(
-                'فشل الطلب: صلاحيات قاعدة البيانات (RLS) تمنع إضافة الطلب.',
-                'Order failed: database permissions (RLS) are blocking the insert.'
-            );
-        } else if (code === '23502') {
-            userMessage = t(
-                'فشل الطلب: يوجد عمود مطلوب في session_orders لم يتم إرساله.',
-                'Order failed: a required column in session_orders was not provided.'
-            );
-        } else if (code === '23514') {
-            userMessage = t(
-                'فشل الطلب: يوجد شرط CHECK في جدول session_orders يمنع هذه القيمة.',
-                'Order failed: a CHECK constraint in session_orders rejected the value.'
-            );
-        }
-
-        console.error('Supabase order error details:', {
-            code,
-            message,
-            details: e?.details,
-            hint: e?.hint
-        });
-
-        showToast(userMessage, 'error');
-    }
-}
-
-async function removeOrderItem(orderId) {
-    const order = activeSessionOrders.find(o => o.id === orderId);
-    if (!order) return;
-    if (order.quantity > 1) {
-        await supabaseClient.from('session_orders').update({ quantity: order.quantity - 1 }).eq('id', orderId);
-        order.quantity -= 1;
-    } else {
-        await supabaseClient.from('session_orders').delete().eq('id', orderId);
-        activeSessionOrders = activeSessionOrders.filter(o => o.id !== orderId);
-    }
-    stationOrdersCache[order.session_id] = activeSessionOrders;
-    updateStationOrdersSummaryDOM();
-    renderStationOrdersSection();
-}
-
-// ============================================================
-// TRANSFER SESSION FUNCTIONS
-// ============================================================
-function openTransferSheet(stationId) {
-    transferSourceStationId = stationId;
-    const session = sessions[stationId];
-    if (!session) {
-        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
-        return;
-    }
-    
-    const body = document.getElementById('transferSheetBody');
-    const sourceStation = stations.find(s => s.id === stationId);
-    const sourceName = sourceStation ? (sourceStation.name || t('جهاز', 'Device') + ' ' + sourceStation.number) : t('جهاز', 'Device');
-    
-    const availableStations = stations.filter(s => s.id !== stationId && !sessions[s.id]);
-    
-    if (availableStations.length === 0) {
-        body.innerHTML = `
-            <div class="empty" style="padding:20px;">
-                <i class="fa-solid fa-exchange" style="font-size:32px;"></i>
-                <div style="font-size:16px;font-weight:700;margin:10px 0;">${t('لا يوجد أجهزة متاحة', 'No available devices')}</div>
-                <div style="font-size:13px;color:var(--text-dim);">${t('كل الأجهزة مشغولة حالياً', 'All devices are currently occupied')}</div>
-                <button class="btn btn-ghost btn-block" style="margin-top:16px;" onclick="closeSheet('transferOverlay')">${t('رجوع', 'Back')}</button>
-            </div>
-        `;
-        openSheet('transferOverlay');
-        return;
-    }
-    
-    body.innerHTML = `
-        <div style="margin-bottom:12px;text-align:center;">
-            <div style="font-size:13px;color:var(--text-dim);">${t('نقل الجلسة من', 'Transfer session from')}</div>
-            <div style="font-size:18px;font-weight:700;color:var(--amber);">${escapeHtml(sourceName)}</div>
-            <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">${t('اختر الجهاز المستهدف', 'Select target device')}</div>
-        </div>
-        <div class="transfer-targets" id="transferTargets">
-            ${availableStations.map(st => {
-                const targetName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
-                return `<div class="transfer-option" data-id="${st.id}" onclick="selectTransferTarget('${st.id}')">
-                    <div class="target-name">${escapeHtml(targetName)}</div>
-                    <div class="target-status">${t('متاح', 'Available')}</div>
-                </div>`;
-            }).join('')}
-        </div>
-        <input type="hidden" id="selectedTransferTarget" value="">
-        <button class="btn btn-transfer btn-block" id="confirmTransferBtn" onclick="confirmTransfer()" disabled>
-            <i class="fa-solid fa-exchange"></i> ${t('تأكيد النقل', 'Confirm Transfer')}
-        </button>
-        <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeSheet('transferOverlay')">${t('إلغاء', 'Cancel')}</button>
-        <div class="error-text" id="transferError"></div>
-    `;
-    openSheet('transferOverlay');
-}
-
-function selectTransferTarget(stationId) {
-    document.querySelectorAll('.transfer-option').forEach(el => {
-        el.classList.toggle('selected', el.dataset.id === stationId);
-    });
-    document.getElementById('selectedTransferTarget').value = stationId;
-    document.getElementById('confirmTransferBtn').disabled = false;
-}
-
-async function confirmTransfer() {
-    const targetStationId = document.getElementById('selectedTransferTarget').value;
-    const sourceStationId = transferSourceStationId;
-    const errEl = document.getElementById('transferError');
-    errEl.textContent = '';
-    
-    if (!targetStationId) {
-        errEl.textContent = t('اختر جهازاً مستهدفاً أولاً.', 'Select a target device first.');
-        return;
-    }
-    
-    if (sessions[targetStationId]) {
-        errEl.textContent = t('الجهاز المستهدف أصبح مشغولاً.', 'Target device is now occupied.');
-        return;
-    }
-    
-    const sourceSession = sessions[sourceStationId];
-    if (!sourceSession) {
-        errEl.textContent = t('الجلسة المصدر غير موجودة.', 'Source session not found.');
-        return;
-    }
-    
-    const sourceStation = stations.find(s => s.id === sourceStationId);
-    const targetStation = stations.find(s => s.id === targetStationId);
-    const sourceName = sourceStation ? (sourceStation.name || t('جهاز', 'Device') + ' ' + sourceStation.number) : t('جهاز', 'Device');
-    const targetName = targetStation ? (targetStation.name || t('جهاز', 'Device') + ' ' + targetStation.number) : t('جهاز', 'Device');
-    
-    const confirmMsg = t(
-        `هل أنت متأكد من نقل الجلسة من "${sourceName}" إلى "${targetName}"؟\n\nسيتم نقل كل البيانات (الوقت، الأجزاء، الطلبات) مع الجلسة.`,
-        `Are you sure you want to transfer the session from "${sourceName}" to "${targetName}"?\n\nAll data (time, segments, orders) will be transferred with the session.`
-    );
-    
-    if (!confirm(confirmMsg)) return;
-    
-    try {
-        const currentMode = sourceSession.current_mode || 'single';
-        // ✅ ناخد سعر الجهاز المستهدف الحالي دايماً (مش سعر الجلسة القديم)
-        const currentRate = currentMode === 'multi' ? Number(targetStation.multi_rate) : Number(targetStation.single_rate);
-
-        // ✅ بدل ما نغيّر سعر الجزء الحالي بأثر رجعي (وده كان بيغير حساب الوقت اللي فات كله)،
-        // نقفل الجزء الحالي بسعره القديم لحد لحظة النقل، ونفتح جزء جديد بالسعر الجديد
-        // بنفس فكرة تبديل Single/Multi بالظبط. المؤقت الكلي (إجمالي الجلسة) بيفضل مكمّل
-        // عادي لأنه مبني على started_at بتاع الجلسة نفسها، مش بتاع الجزء.
-        const now = new Date().toISOString();
-        let activeSeg = await getActiveSegment(sourceSession.id);
-
-        if (activeSeg && Number(activeSeg.rate) !== currentRate) {
-            const start = new Date(activeSeg.started_at);
-            let usedSeconds = (new Date(now) - start) / 1000;
-            let hours = usedSeconds / 3600;
-            let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-
-            const timerType = activeSeg.timer_type || 'countup';
-            let durationSeconds = Math.round(activeSeg.duration_seconds || 0);
-
-            if (timerType === 'countdown' && activeSeg.duration_seconds) {
-                // ✅ الوقت المتبقي يفضل زي ما هو، بيكمل العد من نفس النقطة بالسعر الجديد
-                usedSeconds = Math.min(usedSeconds, activeSeg.duration_seconds);
-                hours = usedSeconds / 3600;
-                amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-                durationSeconds = Math.max(0, Math.round((activeSeg.duration_seconds || 0) - usedSeconds));
-            }
-
-            await closeSegment(activeSeg.id, now, amount);
-            activeSeg = await createSegment(sourceSession.id, currentMode, now, currentRate, timerType, durationSeconds);
-        }
-
-        const { error: updateError } = await supabaseClient.from('sessions')
-            .update({ station_id: targetStationId, rate: currentRate })
-            .eq('id', sourceSession.id)
-            .eq('business_id', business.id)
-            .eq('status', 'active');
-        if (updateError) throw updateError;
-
-        sessionSegmentsCache[sourceSession.id] = null;
-
-        delete sessions[sourceStationId];
-        sessions[targetStationId] = { ...sourceSession, station_id: targetStationId, rate: currentRate };
-        
-        closeSheet('transferOverlay');
-        closeSheet('stationOverlay');
-        renderStationsGrid();
-        renderDashboard();
-        
-        showToast(t(`تم نقل الجلسة إلى ${targetName}`, `Session transferred to ${targetName}`), 'success');
-        
-        setTimeout(() => openStationSheet(targetStationId), 300);
-    } catch (e) {
-        console.error('Error transferring session:', e);
-        errEl.textContent = t('فشل نقل الجلسة: ' + e.message, 'Transfer failed: ' + e.message);
-        showToast(t('فشل نقل الجلسة', 'Transfer failed'), 'error');
-    }
-}
-
-// ============================================================
-// CANCEL SESSION
-// ============================================================
-function confirmCancelSession(stationId) {
-    const session = sessions[stationId];
-    if (!session) return;
-    
-    const totalTime = formatElapsed(new Date(session.started_at));
-    const hasOrders = activeSessionOrders && activeSessionOrders.length > 0;
-    const ordersCount = hasOrders ? activeSessionOrders.length : 0;
-    
-    let confirmMsg = t(
-        `⚠️ هل أنت متأكد من إلغاء الجلسة؟\n\nالمدة: ${totalTime}\nالطلبات: ${ordersCount} صنف\n\nملاحظة: لن يتم تسجيل أي إيراد من هذه الجلسة.`,
-        `⚠️ Are you sure you want to cancel this session?\n\nDuration: ${totalTime}\nOrders: ${ordersCount} items\n\nNote: No revenue will be recorded from this session.`
-    );
-    
-    if (!confirm(confirmMsg)) return;
-    
-    const secondConfirm = t(
-        'تأكيد نهائي: هل أنت متأكد أنك لا تريد تسجيل هذه الجلسة؟',
-        'Final confirmation: Are you sure you don\'t want to record this session?'
-    );
-    if (!confirm(secondConfirm)) return;
-    
-    executeCancelSession(stationId);
-}
-
-async function executeCancelSession(stationId) {
-    const session = sessions[stationId];
-    if (!session) {
-        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
-        return;
-    }
-    
-    endingSessionInProgress = true;
-    
-    try {
-        const activeSeg = await getActiveSegment(session.id);
-        if (activeSeg && !activeSeg.ended_at) {
-            const now = new Date().toISOString();
-            await closeSegment(activeSeg.id, now, 0);
-        }
-        
-        const { data: orders } = await supabaseClient
-            .from('session_orders')
-            .select('id')
-            .eq('session_id', session.id);
-        
-        if (orders && orders.length > 0) {
-            const orderIds = orders.map(o => o.id);
-            await supabaseClient.from('session_orders').delete().in('id', orderIds);
-        }
-        
-        await supabaseClient.from('session_segments').delete().eq('session_id', session.id);
-        await supabaseClient.from('sessions').delete().eq('id', session.id);
-        
-        delete sessions[stationId];
-        
-        renderStationsGrid();
-        closeSheet('stationOverlay');
-        renderDashboard();
-        
-        showToast(t('تم إلغاء الجلسة', 'Session cancelled'), 'warning');
-    } catch (e) {
-        console.error('Error cancelling session:', e);
-        endingSessionInProgress = false;
-        showToast(t('فشل إلغاء الجلسة: ' + e.message, 'Failed to cancel session: ' + e.message), 'error');
-    }
-}
-
-// ============================================================
-// TIMER TYPE SELECTION
-// ============================================================
-function selectTimerType(type) {
-    document.querySelectorAll('.timer-option').forEach(el => {
-        el.classList.remove('selected-up', 'selected-down');
-        if (el.dataset.timer === type) {
-            el.classList.add(type === 'countup' ? 'selected-up' : 'selected-down');
-        }
-    });
-    document.getElementById('selectedTimerType').value = type;
-    
-    const durationSelector = document.getElementById('durationSelector');
-    if (durationSelector) {
-        durationSelector.style.display = type === 'countdown' ? 'block' : 'none';
-        if (type === 'countdown') {
-            setTimeout(updateDurationDisplay, 50);
-        }
-    }
-}
-
-function updateDurationDisplay() {
-    const input = document.getElementById('durationInput');
-    const displayEl = document.getElementById('durationDisplay');
-    
-    if (!input || !displayEl) return;
-    
-    const hours = parseFloat(input.value) || 0;
-    
-    if (hours <= 0) {
-        displayEl.textContent = t('غير صالح', 'Invalid');
-        document.getElementById('selectedDuration').value = 0;
-        return;
-    }
-    const totalMinutes = Math.round(hours * 60);
-    const h = Math.floor(totalMinutes / 60);
-    const m = totalMinutes % 60;
-    let displayText = '';
-    if (h > 0) displayText += `${h} ${t('ساعة', 'hour')}`;
-    if (m > 0) displayText += ` ${m} ${t('دقيقة', 'min')}`;
-    if (!displayText) displayText = `${totalMinutes} ${t('دقيقة', 'min')}`;
-    displayEl.textContent = displayText;
-    
-    document.getElementById('selectedDuration').value = Math.round(hours * 3600);
-}
-
-// ============================================================
-// STATION SHEET (Session Management)
-// ============================================================
-async function openStationSheet(stationId) {
-    activeStationId = stationId;
-    const st = stations.find(s => s.id === stationId);
-    const session = sessions[stationId];
-    const displayName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
-    document.getElementById('stationSheetTitle').textContent = displayName;
-    const body = document.getElementById('stationSheetBody');
-
-    body.innerHTML = '';
-
-    if (!session && st.station_type === 'drinks') {
-        currentOrderSessionId = null;
-        body.innerHTML = `
-            <div style="text-align:center;margin-bottom:12px;">
-                <span style="font-size:36px;">🍹</span>
-                <div style="font-size:14px;color:var(--text-dim);margin-top:4px;">${t('ترابيزة مشروبات — بدون احتساب وقت', 'Drinks table — no time is billed')}</div>
-            </div>
-            <div class="section-title">${t('دفعة مقدمة (اختياري)', 'Prepayment (optional)')}</div>
-            <div class="field">
-                <label data-ar="لو العميل دفع فلوس قبل ما يقعد" data-en="If the customer paid before sitting">${t('المبلغ المدفوع مقدماً (جنيه)', 'Amount Prepaid (EGP)')}</label>
-                <input type="number" id="prepaymentInput" class="mono" min="0" step="0.5" value="0" placeholder="0">
-            </div>
-            <button class="btn btn-amber btn-block" onclick="startDrinksSession('${stationId}')">
-                <i class="fa-solid fa-play"></i> ${t('فتح الترابيزة', 'Open Table')}
-            </button>
-            <div class="error-text" id="startSessionError"></div>
-        `;
-        openSheet('stationOverlay');
-        return;
-    }
-
-    if (!session) {
-        currentOrderSessionId = null;
-        const singleRate = st.single_rate || 20;
-        const multiRate = st.multi_rate || 30;
-        body.innerHTML = `
-            <div class="section-title">${t('اختر وضع اللعب', 'Select Gameplay Mode')}</div>
-            <div class="mode-selector" id="modeSelector">
-                <div class="mode-option selected-single" data-mode="single" onclick="selectStartMode('single')">
-                    <span class="mode-icon">🎮</span>
-                    <div class="mode-name">${t('Single', 'Single')}</div>
-                    <div class="mode-rate">${money(singleRate)} ${t('ج/ساعة', 'EGP/hr')}</div>
-                </div>
-                <div class="mode-option" data-mode="multi" onclick="selectStartMode('multi')">
-                    <span class="mode-icon">👥</span>
-                    <div class="mode-name">${t('Multi', 'Multi')}</div>
-                    <div class="mode-rate">${money(multiRate)} ${t('ج/ساعة', 'EGP/hr')}</div>
-                </div>
-            </div>
-            <input type="hidden" id="selectedStartMode" value="single">
-            
-            <div class="section-title">${t('نوع التايمر', 'Timer Type')}</div>
-            <div class="timer-selector" id="timerSelector">
-                <div class="timer-option selected-up" data-timer="countup" onclick="selectTimerType('countup')">
-                    <span class="timer-icon">⬆️</span>
-                    <div class="timer-name">${t('تصاعدي', 'Count Up')}</div>
-                    <div class="timer-desc">${t('يحسب الوقت الفعلي', 'Counts actual time')}</div>
-                </div>
-                <div class="timer-option" data-timer="countdown" onclick="selectTimerType('countdown')">
-                    <span class="timer-icon">⬇️</span>
-                    <div class="timer-name">${t('تنازلي', 'Count Down')}</div>
-                    <div class="timer-desc">${t('يعد تنازلي من مدة محددة', 'Counts down from set duration')}</div>
-                </div>
-            </div>
-            <input type="hidden" id="selectedTimerType" value="countup">
-            
-            <div id="durationSelector" style="display:none;">
-                <div class="section-title">${t('المدة بالساعات', 'Duration in Hours')}</div>
-                <div class="field">
-                    <label data-ar="أدخل المدة بالساعات (مثال: 1.5 = ساعة ونص)" data-en="Enter duration in hours (e.g., 1.5 = 1 hour 30 min)">${t('المدة بالساعات', 'Duration in Hours')}</label>
-                    <input type="number" id="durationInput" class="mono" step="0.25" min="0.25" value="1" placeholder="مثال: 1.5" oninput="updateDurationDisplay()">
-                </div>
-                <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">
-                    ${t('يمكنك إدخال أي رقم عشري (0.25 = 15 دقيقة، 1.5 = ساعة ونص، 2.25 = ساعتين وربع)', 'You can enter any decimal (0.25 = 15 min, 1.5 = 1.5 hours, 2.25 = 2 hours 15 min)')}
-                </div>
-                <div style="font-size:14px;color:var(--text);margin-top:8px;text-align:center;">
-                    <span style="color:var(--text-dim);">${t('المدة المختارة:', 'Selected duration:')}</span>
-                    <span id="durationDisplay" style="font-weight:700;color:var(--amber);">1 ${t('ساعة', 'hour')}</span>
-                </div>
-            </div>
-            <input type="hidden" id="selectedDuration" value="3600">
-            
-            <div class="section-title">${t('دفعة مقدمة (اختياري)', 'Prepayment (optional)')}</div>
-            <div class="field">
-                <label data-ar="لو العميل دفع فلوس قبل ما يقعد على الجهاز" data-en="If the customer paid before sitting at the device">${t('المبلغ المدفوع مقدماً (جنيه)', 'Amount Prepaid (EGP)')}</label>
-                <input type="number" id="prepaymentInput" class="mono" min="0" step="0.5" value="0" placeholder="0">
-            </div>
-            
-            <button class="btn btn-amber btn-block" onclick="startSessionWithMode('${stationId}')">
-                <i class="fa-solid fa-play"></i> ${t('بدء الجلسة', 'Start Session')}
-            </button>
-            <div class="error-text" id="startSessionError"></div>
-        `;
-        
-        setTimeout(() => {
-            if (document.getElementById('durationInput')) {
-                updateDurationDisplay();
-            }
-        }, 100);
-        openSheet('stationOverlay');
-        return;
-    }
-
-    currentOrderSessionId = session.id;
-
-    // ✅ نفتح الشيت فورًا مع مؤشر تحميل خفيف — الاستجابة بقت لحظية بغض النظر عن سرعة النت،
-    // والبيانات الفعلية بتتحمل وتتحط بعدين لما توصل
-    body.innerHTML = `<div style="text-align:center;padding:60px 0;color:var(--text-dim);"><i class="fa-solid fa-spinner fa-spin" style="font-size:24px;"></i></div>`;
-    openSheet('stationOverlay');
-
-    // ✅ تحديث الكاش عشان نجيب أحدث بيانات
-    sessionSegmentsCache[session.id] = null;
-    activeSegmentCache[session.id] = null;
-
-    // ✅ الطلبات المستقلة عن بعض بتتجاب مرة واحدة على التوازي بدل التوالي
-    // (كانت بتاخد 4-5 رحلات شبكة متتالية، دلوقتي رحلتين بس على أقصى تقدير)
-    const [segments, ordersResult, prepaidTotal] = await Promise.all([
-        getSessionSegments(session.id),
-        supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at'),
-        getPrepaidTotal(session.id).catch(e => { console.warn('Error getting prepaid total:', e); return 0; })
-    ]);
-    let activeSeg = segments.find(s => !s.ended_at);
-    activeSegmentCache[session.id] = activeSeg || null;
-    activeSessionOrders = ordersResult.data || [];
-
-    if (!activeSeg && session._pausedRemaining) {
-        const st2 = stations.find(s => s.id === stationId);
-        const mode = session.current_mode || 'single';
-        const rate = mode === 'single' ? (st2.single_rate || 20) : (st2.multi_rate || 30);
-        const timerType = 'countdown';
-        const durationSeconds = session._pausedRemaining;
-        delete session._pausedRemaining;
-        
-        // ✅ createSegment بيرجع الصف الجديد على طول، فمحتاجين مش نعمل استعلام تاني نجيبه بيه
-        activeSeg = await createSegment(session.id, mode, new Date().toISOString(), rate, timerType, durationSeconds);
-    }
-
-    // ✅ الحسابات دي بقت بتتم محليًا من البيانات اللي جبناها فوق، من غير أي طلب شبكة إضافي
-    const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
-    const currentEstimate = computeSegmentEstimate(activeSeg);
-    
-    const currentMode = activeSeg ? activeSeg.mode : (session.current_mode || 'single');
-    const currentRate = activeSeg ? activeSeg.rate : (st.single_rate || 20);
-    const modeLabel = currentMode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
-    const modeBadgeClass = currentMode === 'single' ? 'badge-mode-single' : 'badge-mode-multi';
-    const switchLabel = currentMode === 'single' ? t('تحويل إلى Multi', 'Switch to Multi') : t('تحويل إلى Single', 'Switch to Single');
-    const switchMode = currentMode === 'single' ? 'multi' : 'single';
-    const switchRate = switchMode === 'single' ? (st.single_rate || 20) : (st.multi_rate || 30);
-    
-    const timerType = activeSeg ? (activeSeg.timer_type || 'countup') : 'countup';
-    const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
-    const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
-    const isCountdown = timerType === 'countdown';
-
-    const activeSegStart = activeSeg ? activeSeg.started_at : session.started_at;
-    const liveEarnedNow = activeSeg ? Math.round((Math.max(0, (nowCorrected() - new Date(activeSeg.started_at)) / 3600000) * Number(activeSeg.rate)) * 100) / 100 : 0;
-    const liveGrandTotal = Math.round((totals.grandTotal + liveEarnedNow) * 100) / 100;
-
-    if (st.station_type === 'drinks') {
-        body.innerHTML = drinksTableSheetHtml(stationId, totals);
-        renderMenuQuickAdd();
-        renderStationOrdersSection();
-        return;
-    }
-
-    body.innerHTML = `
-        <div style="text-align:center;margin-bottom:12px;">
-            <div style="display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;">
-                <span class="badge ${modeBadgeClass}" style="font-size:13px;padding:4px 14px;">${modeLabel}</span>
-                <span class="badge ${timerBadgeClass}" style="font-size:11px;padding:3px 10px;">${timerLabel}</span>
-                <span class="badge badge-teal" style="font-size:13px;padding:4px 14px;">${money(currentRate)} ${t('ج/ساعة', 'EGP/hr')}</span>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-            <div class="stat-card" style="padding:10px;">
-                <div class="stat-label" style="font-size:10px;">${isCountdown ? t('الوقت المتبقي', 'Time Remaining') : t('إجمالي الجلسة', 'Total Session')}</div>
-                <div class="station-timer mono ${isCountdown ? 'countdown' : ''}" style="font-size:22px;" id="activeSessionTimer" data-start="${session.started_at}" data-station-id="${stationId}">${isCountdown ? formatCountdown(getRemainingSeconds(activeSeg)) : formatElapsed(new Date(session.started_at))}</div>
-            </div>
-            <div class="stat-card" style="padding:10px;border-color:${currentMode === 'single' ? 'var(--amber-dim)' : 'var(--teal-dim)'};">
-                <div class="stat-label" style="font-size:10px;">${t('الجزء الحالي', 'Current Segment')}</div>
-                <div class="station-timer mono" style="font-size:22px;color:${currentMode === 'single' ? 'var(--amber)' : 'var(--teal)'};" id="currentSegTimer" data-start="${activeSegStart}">${formatElapsed(new Date(activeSegStart))}</div>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-            <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px;text-align:center;">
-                <div style="font-size:10px;color:var(--text-dim);">${isCountdown ? t('قيمة الوقت المتبقي', 'Remaining Value') : t('قيمة الجزء الحالي', 'Current Segment Value')}</div>
-                <div class="mono" style="font-size:18px;font-weight:700;color:${currentMode === 'single' ? 'var(--amber)' : 'var(--teal)'};" id="currentSegAmount">${moneyDec(currentEstimate.amount)}</div>
-            </div>
-            <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px;text-align:center;">
-                <div style="font-size:10px;color:var(--text-dim);">${t('الإجمالي الكلي', 'Grand Total')}</div>
-                <div class="mono" style="font-size:18px;font-weight:700;color:var(--amber);" id="overallTotalAmount" data-base-total="${totals.grandTotal}">${moneyDec(liveGrandTotal)}</div>
-            </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed ${totals.prepaidTotal > 0 ? 'var(--teal-dim)' : 'var(--border)'};">
-            <span style="font-size:12px;color:var(--text-dim);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span>
-            <span class="mono" style="font-size:15px;font-weight:700;color:${totals.prepaidTotal > 0 ? 'var(--teal)' : 'var(--text-faint)'};">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
-        </div>
-        
-        ${segments.filter(s => s.ended_at).length > 0 ? `
-        <div class="segment-breakdown">
-            <div style="font-size:11px;color:var(--text-dim);font-weight:600;margin-bottom:4px;">${t('تفصيل الأجزاء السابقة', 'Previous Segments')}</div>
-            ${segments.filter(s => s.ended_at).map(s => {
-                const start2 = new Date(s.started_at);
-                const end = new Date(s.ended_at);
-                const mins = Math.round((end - start2) / 60000);
-                const amt = (s.amount !== null && s.amount !== undefined) ? Number(s.amount) : calculateSegmentAmountFromTimes(s.started_at, s.ended_at, s.rate);
-                const modeClass = s.mode === 'single' ? 'seg-mode-single' : 'seg-mode-multi';
-                const modeLabel2 = s.mode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
-                const segTimerType = s.timer_type || 'countup';
-                const timerLabel2 = segTimerType === 'countdown' ? '⬇️' : '⬆️';
-                return `<div class="segment-row"><span class="seg-label"><span class="${modeClass}">●</span> ${modeLabel2} ${mins}${t('د', 'min')} ${timerLabel2} @ ${money(s.rate)}</span><span class="seg-value ${modeClass}">${moneyDec(amt)}</span></div>`;
-            }).join('')}
-            <div class="segment-divider"></div>
-            <div class="segment-row"><span class="seg-label">${t('إجمالي Single', 'Single Total')}</span><span class="seg-value seg-mode-single">${moneyDec(totals.singleTotal)}</span></div>
-            <div class="segment-row"><span class="seg-label">${t('إجمالي Multi', 'Multi Total')}</span><span class="seg-value seg-mode-multi">${moneyDec(totals.multiTotal)}</span></div>
-            <div class="segment-row"><span class="seg-label">${t('الطلبات', 'Orders')}</span><span class="seg-value">${moneyDec(totals.ordersTotal)}</span></div>
-            <div class="segment-row segment-total"><span class="seg-label">${t('الإجمالي الكلي', 'Grand Total')}</span><span class="seg-value" style="color:var(--amber);">${moneyDec(totals.grandTotal)}</span></div>
-        </div>
-        ` : ''}
-        
-        <div class="section-title">${t('إضافة طلب', 'Add Order')}</div>
-        <div id="menuQuickAdd" style="margin-bottom:12px;"></div>
-        
-        <div class="section-title">${t('الطلبات', 'Orders')}</div>
-        <div class="panel" id="stationOrdersList"></div>
-        
-        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
-            <button class="btn btn-amber btn-block" onclick="handleSwitchMode('${session.id}','${switchMode}','${st.id}')" id="switchModeBtn">
-                <i class="fa-solid fa-arrows-rotate"></i> ${switchLabel} (${money(switchRate)} ${t('ج/ساعة', 'EGP/hr')})
-            </button>
-            
-            <button class="btn btn-prepay btn-block" onclick="openPrepaymentSheet('${stationId}')">
-                <i class="fa-solid fa-money-bill-wave"></i> ${t('إضافة دفعة مقدمة', 'Add Prepayment')}
-            </button>
-            <div style="display:flex;gap:8px;">
-                <button class="btn btn-transfer" style="flex:1;" onclick="openTransferSheet('${stationId}')">
-                    <i class="fa-solid fa-exchange"></i> ${t('نقل الجلسة', 'Transfer Session')}
-                </button>
-                <button class="btn btn-cancel" style="flex:1;" onclick="confirmCancelSession('${stationId}')">
-                    <i class="fa-solid fa-xmark"></i> ${t('إلغاء الجلسة', 'Cancel Session')}
-                </button>
-            </div>
-            <button class="btn btn-ghost" onclick="closeSheet('stationOverlay')">${t('رجوع', 'Back')}</button>
-            <button class="btn btn-teal btn-block" onclick="showEndSessionPayment('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
-        </div>
-        <div class="error-text" id="stationSheetError"></div>
-    `;
-    
-    renderMenuQuickAdd();
-    renderStationOrdersSection();
-}
-
-// ============================================================
-// شيت مبسط لترابيزات المشروبات (بدون وقت — طلبات فقط)
-// ============================================================
-function drinksTableSheetHtml(stationId, totals) {
-    return `
-        <div style="text-align:center;margin-bottom:12px;">
-            <span class="badge badge-teal" style="font-size:13px;padding:4px 14px;">🍹 ${t('طلبات فقط', 'Orders Only')}</span>
-        </div>
-        <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:10px;text-align:center;margin-bottom:12px;">
-            <div style="font-size:10px;color:var(--text-dim);">${t('إجمالي الطلبات', 'Orders Total')}</div>
-            <div class="mono" style="font-size:22px;font-weight:700;color:var(--amber);" id="overallTotalAmount" data-base-total="${totals.grandTotal}">${moneyDec(totals.grandTotal)}</div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed ${totals.prepaidTotal > 0 ? 'var(--teal-dim)' : 'var(--border)'};">
-            <span style="font-size:12px;color:var(--text-dim);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span>
-            <span class="mono" style="font-size:15px;font-weight:700;color:${totals.prepaidTotal > 0 ? 'var(--teal)' : 'var(--text-faint)'};">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
-        </div>
-
-        <div class="section-title">${t('إضافة طلب', 'Add Order')}</div>
-        <div id="menuQuickAdd" style="margin-bottom:12px;"></div>
-
-        <div class="section-title">${t('الطلبات', 'Orders')}</div>
-        <div class="panel" id="stationOrdersList"></div>
-
-        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
-            <button class="btn btn-prepay btn-block" onclick="openPrepaymentSheet('${stationId}')">
-                <i class="fa-solid fa-money-bill-wave"></i> ${t('إضافة دفعة مقدمة', 'Add Prepayment')}
-            </button>
-            <button class="btn btn-cancel btn-block" onclick="confirmCancelSession('${stationId}')">
-                <i class="fa-solid fa-xmark"></i> ${t('إلغاء الجلسة', 'Cancel Session')}
-            </button>
-            <button class="btn btn-ghost" onclick="closeSheet('stationOverlay')">${t('رجوع', 'Back')}</button>
-            <button class="btn btn-teal btn-block" onclick="showEndSessionPayment('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
-        </div>
-        <div class="error-text" id="stationSheetError"></div>
-    `;
-}
-
-function normalizeMenuCategory(category) {
-    const value = String(category || '').trim().toLowerCase();
-    const map = {
-        'مشروبات باردة': 'cold_drinks',
-        'cold drinks': 'cold_drinks',
-        'cold_drinks': 'cold_drinks',
-        'مشروبات ساخنة': 'hot_drinks',
-        'hot drinks': 'hot_drinks',
-        'hot_drinks': 'hot_drinks',
-        'أكل': 'food',
-        'اكل': 'food',
-        'food': 'food',
-        'أخرى': 'other',
-        'اخري': 'other',
-        'other': 'other'
-    };
-    return map[value] || 'other';
-}
-
-function menuCategoryLabel(category) {
-    const key = normalizeMenuCategory(category);
-    const labels = {
-        cold_drinks: t('🧊 مشروبات باردة', '🧊 Cold Drinks'),
-        hot_drinks: t('☕ مشروبات ساخنة', '☕ Hot Drinks'),
-        food: t('🍔 أكل', '🍔 Food'),
-        other: t('📦 أخرى', '📦 Other')
-    };
-    return labels[key];
-}
-
-function renderMenuQuickAdd() {
-    const container = document.getElementById('menuQuickAdd');
-    if (!container) return;
-    
-    if (menuItems.length === 0) {
-        container.innerHTML = `<span style="color:var(--text-faint);font-size:13px;">${t('مفيش أصناف — ضيفها من الإعدادات', 'No items — add them from settings')}</span>`;
-        return;
-    }
-    
-    const grouped = {};
-    menuItems.forEach(item => {
-        const category = normalizeMenuCategory(item.category);
-        if (!grouped[category]) grouped[category] = [];
-        grouped[category].push(item);
-    });
-    
-    let html = '';
-    const categoryNames = Object.keys(grouped);
-    
-    for (let i = 0; i < categoryNames.length; i++) {
-        const category = categoryNames[i];
-        const items = grouped[category];
-        const isOpen = (i === 0);
-        if (categoryToggleState[category] === undefined) {
-            categoryToggleState[category] = isOpen;
-        }
-        const open = categoryToggleState[category];
-        
-        html += `<div class="menu-category-group">`;
-        html += `<div class="menu-category-toggle" onclick="toggleCategory('${escapeHtml(category)}')">`;
-        html += `<span class="cat-title">${escapeHtml(menuCategoryLabel(category))}</span>`;
-        html += `<i class="fa-solid fa-chevron-down cat-arrow ${open ? 'open' : ''}"></i>`;
-        html += `</div>`;
-        html += `<div class="menu-category-items ${open ? 'open' : ''}" data-category="${escapeHtml(category)}">`;
-        items.forEach(item => {
-            const sessionId =
-                currentOrderSessionId ||
-                (activeStationId && sessions[activeStationId] ? sessions[activeStationId].id : '') ||
-                (activeSessionOrders.length > 0 ? activeSessionOrders[0].session_id : '');
-            html += `<button class="btn btn-ghost btn-sm" onclick="addOrderItem('${sessionId}','${item.id}')">${escapeHtml(item.name)} - ${money(item.price)}</button>`;
-        });
-        html += `</div></div>`;
-    }
-    
-    container.innerHTML = html;
-}
-
-function toggleCategory(category) {
-    categoryToggleState[category] = !categoryToggleState[category];
-    const isOpen = categoryToggleState[category];
-    
-    const container = document.getElementById('menuQuickAdd');
-    if (!container) return;
-    const toggles = container.querySelectorAll('.menu-category-toggle');
-    toggles.forEach(toggle => {
-        const titleEl = toggle.querySelector('.cat-title');
-        if (titleEl && titleEl.textContent.trim() === menuCategoryLabel(category)) {
-            const arrow = toggle.querySelector('.cat-arrow');
-            if (arrow) {
-                arrow.classList.toggle('open', isOpen);
-            }
-        }
-    });
-    
-    const itemsContainer = container.querySelector(`.menu-category-items[data-category="${category}"]`);
-    if (itemsContainer) {
-        itemsContainer.classList.toggle('open', isOpen);
-    }
-}
-
-function renderStationOrdersSection() {
-    const el = document.getElementById('stationOrdersList');
-    if (!el) return;
-    el.innerHTML = activeSessionOrders.length === 0
-        ? `<div class="empty"><i class="fa-solid fa-utensils"></i>${t('مفيش طلبات على الجلسة دي', 'No orders on this session')}</div>`
-        : activeSessionOrders.map(o => `<div class="list-row">
-            <div><div class="row-title">${escapeHtml(o.item_name)}</div><div class="row-sub">${o.quantity} × ${money(o.unit_price)}</div></div>
-            <div style="display:flex;align-items:center;gap:10px;">
-                <div class="row-value">${money(o.quantity * o.unit_price)}</div>
-                <button class="btn btn-ghost btn-sm" style="padding:6px 10px;" onclick="removeOrderItem('${o.id}')" title="${t('حذف/إنقاص', 'Remove/Decrease')}"><i class="fa-solid fa-minus"></i></button>
-            </div>
-        </div>`).join('');
-}
-
-function selectStartMode(mode) {
-    document.querySelectorAll('.mode-option').forEach(el => {
-        el.classList.remove('selected-single', 'selected-multi');
-        if (el.dataset.mode === mode) {
-            el.classList.add(mode === 'single' ? 'selected-single' : 'selected-multi');
-        }
-    });
-    document.getElementById('selectedStartMode').value = mode;
-}
-
-async function startSessionWithMode(stationId) {
-    const mode = document.getElementById('selectedStartMode').value;
-    const timerType = document.getElementById('selectedTimerType').value;
-    
-    const hours = parseFloat(document.getElementById('durationInput').value) || 1;
-    const durationSeconds = Math.round(hours * 3600);
-    
-    const st = stations.find(s => s.id === stationId);
-    const rate = mode === 'single' ? (st.single_rate || 20) : (st.multi_rate || 30);
-    
-    // ✅ نقرأ قيمة الدفعة المقدمة فوراً *قبل* أي عملية async
-    // لأن أول ما الجلسة تتسجل في الداتابيز، الـ realtime subscription بيرجع يعمل
-    // openStationSheet() تلقائياً ويمسح الفورم (فيه حقل الدفعة المقدمة) قبل ما
-    // نوصل نقراه، فكانت الدفعة بتتفقد بصمت من غير أي رسالة خطأ
-    const prepayInputEl = document.getElementById('prepaymentInput');
-    const prepayAmount = prepayInputEl ? (parseFloat(prepayInputEl.value) || 0) : 0;
-    
-    const errEl = document.getElementById('startSessionError');
-    errEl.textContent = '';
-    
-    if (timerType === 'countdown' && durationSeconds < 60) {
-        errEl.textContent = t('المدة يجب أن تكون دقيقة على الأقل للتايمر التنازلي.', 'Duration must be at least 1 minute for countdown timer.');
-        return;
-    }
-    
-    const now = new Date(nowCorrected()).toISOString();
-    
-    try {
-        const { data: session, error } = await supabaseClient.from('sessions').insert({
-            business_id: business.id, 
-            station_id: stationId, 
-            rate: rate,
-            started_at: now,
-            started_by_device: getDeviceId(),
-            current_mode: mode,
-            timer_type: timerType
-        }).select().single();
-        if (error) { throw error; }
-        
-        await createSegment(session.id, mode, now, rate, timerType, durationSeconds);
-        
-        // ✅ تسجيل الجلسة في الـ sessions قبل ما نضيف الدفعة المقدمة
-        sessions[stationId] = session;
-        renderStationsGrid();
-        
-        const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
-        const durationDisplay = timerType === 'countdown' ? ` (${hours} ${t('ساعة', 'hour')})` : '';
-        
-        // ✅ لو العميل دفع مقدماً قبل ما يقعد، نسجل الدفعة دي على الجلسة الجديدة
-        if (prepayAmount > 0) {
-            try {
-                await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
-                showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) + دفعة مقدمة ${moneyDec(prepayAmount)} ج`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) + Prepayment ${moneyDec(prepayAmount)} EGP`), 'success');
-            } catch (e) {
-                console.warn('Error saving prepayment on start:', e);
-                showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) لكن فشل تسجيل الدفعة المقدمة`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay}) but failed to save prepayment`), 'error');
-            }
-        } else {
-            showToast(t(`اتبدأت الجلسة - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay})`, `Session started - ${mode === 'single' ? 'Single' : 'Multi'} (${timerLabel}${durationDisplay})`), 'success');
-        }
-        
-        renderDashboard();
-        // ✅ نحدّث محتوى نفس الشيت المفتوح فورًا من غير ما نقفله ونفتحه تاني بعد تأخير مصطنع
-        await refreshStationSheetContent(stationId);
-    } catch (e) {
-        console.error('Error starting session:', e);
-        errEl.textContent = t('فشل بدء الجلسة', 'Failed to start session');
-    }
-}
-
-// ============================================================
-// بدء جلسة لترابيزة مشروبات (بدون وقت — طلبات فقط)
-// ============================================================
-async function startDrinksSession(stationId) {
-    const prepayInputEl = document.getElementById('prepaymentInput');
-    const prepayAmount = prepayInputEl ? (parseFloat(prepayInputEl.value) || 0) : 0;
-    const errEl = document.getElementById('startSessionError');
-    if (errEl) errEl.textContent = '';
-
-    const now = new Date(nowCorrected()).toISOString();
-
-    try {
-        const { data: session, error } = await supabaseClient.from('sessions').insert({
-            business_id: business.id,
-            station_id: stationId,
-            rate: 0,
-            started_at: now,
-            started_by_device: getDeviceId(),
-            current_mode: 'single',
-            timer_type: 'countup'
-        }).select().single();
-        if (error) { throw error; }
-
-        await createSegment(session.id, 'single', now, 0, 'countup', 0);
-
-        sessions[stationId] = session;
-        renderStationsGrid();
-
-        if (prepayAmount > 0) {
-            try {
-                await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
-                showToast(t(`اتفتحت الترابيزة + دفعة مقدمة ${moneyDec(prepayAmount)} ج`, `Table opened + Prepayment ${moneyDec(prepayAmount)} EGP`), 'success');
-            } catch (e) {
-                console.warn('Error saving prepayment on start:', e);
-                showToast(t('اتفتحت الترابيزة لكن فشل تسجيل الدفعة المقدمة', 'Table opened but failed to save prepayment'), 'error');
-            }
-        } else {
-            showToast(t('اتفتحت الترابيزة', 'Table opened'), 'success');
-        }
-
-        renderDashboard();
-        await refreshStationSheetContent(stationId);
-    } catch (e) {
-        console.error('Error starting drinks session:', e);
-        if (errEl) errEl.textContent = t('فشل فتح الترابيزة', 'Failed to open table');
-    }
-}
-
-// ============================================================
-// END SESSION WITH PAYMENT - مع خيار تمديد الوقت للجلسات التنازلية
-// ============================================================
-function showEndSessionPayment(stationId) {
-    endSessionStationId = stationId;
-    activeStationId = stationId;
-    endingSessionInProgress = true;
-    const session = sessions[stationId];
-    if (!session) { endingSessionInProgress = false; return; }
-
-    (async () => {
-        const activeSeg = await getActiveSegment(session.id);
-        
-        // ✅ لو الجلسة تنازلية والوقت خلص أو باقي أقل من 5 ثواني، نعرض خيار التمديد
-        if (activeSeg && activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-            const remaining = getRemainingSeconds(activeSeg);
-            // لو الوقت خلص (0) أو أقل من 5 ثواني، نعرض خيار التمديد
-            if (remaining <= 5) {
-                showExtendOrEndOptions(stationId, session, activeSeg);
-                return;
-            }
-        }
-        
-        // ✅ باقي الكود القديم (لو الجلسة تصاعدية أو فيها وقت باقي)
-        await proceedToEndSession(stationId, session);
-    })();
-}
-
-// ============================================================
-// ✅ عرض خيارات التمديد أو إنهاء الجلسة (للجلسات التنازلية المنتهية)
-// ============================================================
-function showExtendOrEndOptions(stationId, session, activeSeg) {
-    // ✅ لو الدالة استُدعيت من زرار "رجوع" (بدون session/activeSeg)، نجيبهم من الكاش المحلي
-    if (!session) session = sessions[stationId];
-    if (!session) {
-        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
-        return;
-    }
-    if (!activeSeg) activeSeg = getActiveSegmentFast(session.id);
-    if (!activeSeg) {
-        showToast(t('لا يوجد جزء نشط للجلسة', 'No active segment found'), 'error');
-        return;
-    }
-
-    const st = stations.find(s => s.id === stationId);
-    const stationName = st ? (st.name || t('جهاز', 'Device') + ' ' + st.number) : t('جهاز', 'Device');
-    
-    const body = document.getElementById('stationSheetBody');
-    if (!body) return;
-    
-    // حساب إجمالي الجلسة حتى الآن
-    const start = new Date(activeSeg.started_at);
-    const now = new Date(nowCorrected());
-    const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
-    const hoursUsed = elapsedSeconds / 3600;
-    const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
-    
-    body.innerHTML = `
-        <div style="text-align:center;margin:20px 0;">
-            <div style="font-size:48px;margin-bottom:8px;">⏰</div>
-            <div style="font-size:22px;font-weight:800;color:var(--amber);">${t('انتهى الوقت!', 'Time\'s up!')}</div>
-            <div style="font-size:14px;color:var(--text-dim);margin-top:4px;">
-                ${t('جهاز', 'Device')} <strong>${escapeHtml(stationName)}</strong>
-            </div>
-            <div style="font-size:13px;color:var(--text-dim);margin-top:4px;">
-                ${t('المدة المستخدمة', 'Time used')}: ${formatElapsed(start)} 
-                (${moneyDec(hoursUsed)} ${t('ساعة', 'hr')})
-            </div>
-            <div style="font-size:16px;font-weight:700;color:var(--amber);margin-top:6px;">
-                ${t('المبلغ المستحق حتى الآن', 'Amount due so far')}: ${moneyDec(currentAmount)} ${t('ج', 'EGP')}
-            </div>
-        </div>
-        
-        <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
-            <button class="btn btn-amber btn-block" onclick="showExtendTimeSheet('${stationId}')" style="font-size:16px;padding:16px;">
-                <i class="fa-solid fa-clock"></i> ${t('🔄 تمديد الوقت', 'Extend Time')}
-            </button>
-            <button class="btn btn-teal btn-block" onclick="proceedToEndSession('${stationId}', null)" style="font-size:16px;padding:16px;">
-                <i class="fa-solid fa-stop"></i> ${t('💰 إنهاء الجلسة والدفع', 'End Session & Pay')}
-            </button>
-        </div>
-        <div class="error-text" id="extendError"></div>
-    `;
-}
-
-// ============================================================
-// ✅ عرض شاشة إضافة وقت إضافي للجلسة التنازلية
-// ============================================================
-function showExtendTimeSheet(stationId) {
-    const session = sessions[stationId];
-    if (!session) return;
-    
-    const activeSeg = getActiveSegmentFast(session.id);
-    if (!activeSeg) {
-        showToast(t('لا يوجد جزء نشط للجلسة', 'No active segment found'), 'error');
-        return;
-    }
-    
-    const st = stations.find(s => s.id === stationId);
-    const stationName = st ? (st.name || t('جهاز', 'Device') + ' ' + st.number) : t('جهاز', 'Device');
-    
-    // حساب الوقت المستخدم حتى الآن
-    const start = new Date(activeSeg.started_at);
-    const now = new Date(nowCorrected());
-    const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
-    const hoursUsed = elapsedSeconds / 3600;
-    const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
-    
-    const body = document.getElementById('stationSheetBody');
-    if (!body) return;
-    
-    body.innerHTML = `
-        <div style="text-align:center;margin:12px 0;">
-            <div style="font-size:28px;margin-bottom:4px;">⏱️</div>
-            <div style="font-size:18px;font-weight:700;">${t('تمديد الوقت', 'Extend Time')}</div>
-            <div style="font-size:13px;color:var(--text-dim);">
-                ${escapeHtml(stationName)} — ${t('المستخدم', 'Used')}: ${formatElapsed(start)} (${moneyDec(hoursUsed)} ${t('ساعة', 'hr')})
-            </div>
-            <div style="font-size:13px;color:var(--text-dim);">
-                ${t('المبلغ المستحق حتى الآن', 'Amount due so far')}: ${moneyDec(currentAmount)} ${t('ج', 'EGP')}
-            </div>
-        </div>
-        
-        <div class="field">
-            <label data-ar="أضف وقت إضافي (بالساعات)" data-en="Add extra time (in hours)">${t('أضف وقت إضافي (بالساعات)', 'Add extra time (in hours)')}</label>
-            <input type="number" id="extendHoursInput" class="mono" step="0.25" min="0.25" value="1" placeholder="مثال: 1.5">
-        </div>
-        <div style="font-size:12px;color:var(--text-dim);margin:-8px 0 12px;text-align:center;">
-            ${t('0.25 = 15 دقيقة، 0.5 = 30 دقيقة، 1 = ساعة، 2 = ساعتين', '0.25 = 15 min, 0.5 = 30 min, 1 = 1 hour, 2 = 2 hours')}
-        </div>
-        
-        <div style="display:flex;gap:8px;margin-top:8px;">
-            <button class="btn btn-ghost" style="flex:1;" onclick="showExtendOrEndOptions('${stationId}', null, null)">
-                <i class="fa-solid fa-arrow-right"></i> ${t('رجوع', 'Back')}
-            </button>
-            <button class="btn btn-amber" style="flex:2;" onclick="confirmExtendTime('${stationId}')">
-                <i class="fa-solid fa-check"></i> ${t('تأكيد التمديد', 'Confirm Extend')}
-            </button>
-        </div>
-        <div class="error-text" id="extendTimeError"></div>
-    `;
-}
-
-// ============================================================
-// ✅ تأكيد تمديد الوقت للجلسة التنازلية
-// ============================================================
-async function confirmExtendTime(stationId) {
-    const session = sessions[stationId];
-    if (!session) {
-        showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
-        return;
-    }
-    
-    const activeSeg = getActiveSegmentFast(session.id);
-    if (!activeSeg) {
-        showToast(t('لا يوجد جزء نشط للجلسة', 'No active segment found'), 'error');
-        return;
-    }
-    
-    const input = document.getElementById('extendHoursInput');
-    const errEl = document.getElementById('extendTimeError');
-    if (errEl) errEl.textContent = '';
-    
-    const extraHours = parseFloat(input ? input.value : '');
-    if (!extraHours || extraHours <= 0) {
-        if (errEl) errEl.textContent = t('أدخل مدة صحيحة أكبر من صفر', 'Enter a valid duration greater than zero');
-        return;
-    }
-    
-    const extraSeconds = Math.round(extraHours * 3600);
-    if (extraSeconds < 60) {
-        if (errEl) errEl.textContent = t('المدة يجب أن تكون دقيقة على الأقل', 'Duration must be at least 1 minute');
-        return;
-    }
-    
-    try {
-        // ✅ 1. نحسب الوقت المستخدم حتى الآن في الجزء الحالي
-        const start = new Date(activeSeg.started_at);
-        const now = new Date(nowCorrected());
-        const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
-        const hoursUsed = elapsedSeconds / 3600;
-        const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
-        
-        // ✅ 2. نقفل الجزء الحالي بالمبلغ المستحق
-        await closeSegment(activeSeg.id, now.toISOString(), currentAmount);
-        
-        // ✅ 3. نفتح جزء جديد بنفس الوضع والمعدل مع المدة الجديدة (الوقت المتبقي القديم + الوقت الإضافي)
-        const remainingOld = Math.max(0, (activeSeg.duration_seconds || 0) - elapsedSeconds);
-        const newDuration = remainingOld + extraSeconds;
-        
-        const mode = activeSeg.mode || 'single';
-        const rate = activeSeg.rate || (mode === 'single' ? 20 : 30);
-        const timerType = 'countdown';
-        
-        await createSegment(session.id, mode, now.toISOString(), rate, timerType, newDuration);
-        
-        // ✅ 4. تحديث الكاش
-        activeSegmentCache[session.id] = null;
-        sessionSegmentsCache[session.id] = null;
-        
-        // ✅ 5. نعمل ريفريش للشاشة
-        showToast(t(`✅ تم تمديد الوقت ${extraHours} ساعة`, `✅ Time extended by ${extraHours} hours`), 'success');
-        
-        // ✅ 6. نحدث واجهة الجلسة
-        await refreshStationSheetContent(stationId);
-        
-    } catch (e) {
-        console.error('Error extending time:', e);
-        if (errEl) errEl.textContent = t('فشل تمديد الوقت: ' + e.message, 'Failed to extend time: ' + e.message);
-        showToast(t('فشل تمديد الوقت', 'Failed to extend time'), 'error');
-    }
-}
-
-// ============================================================
-// ✅ متابعة إنهاء الجلسة (الجزء القديم من showEndSessionPayment)
-// ============================================================
-async function proceedToEndSession(stationId, sessionParam) {
-    const session = sessionParam || sessions[stationId];
-    if (!session) { 
-        endingSessionInProgress = false;
-        return; 
-    }
-    
-    try {
-        const activeSeg = await getActiveSegment(session.id);
-        if (activeSeg && !activeSeg.ended_at) {
-            const now = new Date(nowCorrected()).toISOString();
-            const start = new Date(activeSeg.started_at);
-            let hours = Math.max(0, (new Date(now) - start) / 3600000);
-            let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-            
-            if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-                const elapsedSeconds = (new Date(now) - start) / 1000;
-                const usedSeconds = Math.min(elapsedSeconds, activeSeg.duration_seconds);
-                hours = usedSeconds / 3600;
-                amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-            }
-            
-            await closeSegment(activeSeg.id, now, amount);
-        }
-        
-        const totals = await calculateTotalAmounts(session.id);
-        
-        const { data: ordersDetails } = await supabaseClient
-            .from('session_orders')
-            .select('*')
-            .eq('session_id', session.id)
-            .order('created_at');
-        
-        const body = document.getElementById('stationSheetBody');
-        
-        let ordersHtml = '';
-        if (ordersDetails && ordersDetails.length > 0) {
-            ordersHtml = `
-                <div class="section-title" style="margin-top:8px;font-size:12px;">${t('تفاصيل الطلبات', 'Order Details')}</div>
-                <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px;margin-bottom:8px;">
-                    ${ordersDetails.map(o => `
-                        <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;border-bottom:1px solid var(--border);">
-                            <span>${escapeHtml(o.item_name)} <span style="color:var(--text-dim);font-size:11px;">× ${o.quantity}</span></span>
-                            <span style="font-weight:600;">${moneyDec(o.quantity * o.unit_price)} ${t('ج', 'EGP')}</span>
-                        </div>
-                    `).join('')}
-                    <div style="display:flex;justify-content:space-between;padding:6px 0 2px 0;font-weight:700;border-top:1px solid var(--border);margin-top:4px;padding-top:6px;">
-                        <span>${t('إجمالي الطلبات', 'Orders Total')}</span>
-                        <span>${moneyDec(totals.ordersTotal)} ${t('ج', 'EGP')}</span>
-                    </div>
-                </div>
-            `;
-        }
-        
-        const activeMethods = paymentMethods.filter(pm => pm.active !== false);
-        currentEndSessionTotals = totals;
-        endSessionDiscount = 0;
-        endSessionAmountPaid = null;
-        endSessionPrepaidTotal = totals.prepaidTotal || 0;
-        
-        let paymentHtml = `
-            <div style="text-align:center;margin:12px 0;">
-                <div style="font-size:28px;font-weight:700;color:var(--amber);">${moneyDec(totals.grandTotal)} ${t('ج', 'EGP')}</div>
-                <div style="font-size:12px;color:var(--text-dim);">${t('الإجمالي الكلي', 'Grand Total')}</div>
-            </div>
-            <div class="segment-breakdown" style="margin-bottom:8px;">
-                <div class="segment-row"><span class="seg-label">${t('إجمالي Single', 'Single Total')}</span><span class="seg-value seg-mode-single">${moneyDec(totals.singleTotal)}</span></div>
-                <div class="segment-row"><span class="seg-label">${t('إجمالي Multi', 'Multi Total')}</span><span class="seg-value seg-mode-multi">${moneyDec(totals.multiTotal)}</span></div>
-                <div class="segment-row"><span class="seg-label">${t('الطلبات', 'Orders')}</span><span class="seg-value">${moneyDec(totals.ordersTotal)}</span></div>
-                ${endSessionPrepaidTotal > 0 ? `<div class="segment-row"><span class="seg-label" style="color:var(--teal);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span><span class="seg-value" style="color:var(--teal);">- ${moneyDec(endSessionPrepaidTotal)}</span></div>` : ''}
-            </div>
-            ${ordersHtml}
-            <div class="section-title">${t('الخصم والدفع', 'Discount & Payment')}</div>
-            <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:10px;margin-bottom:10px;">
-                <div style="margin-bottom:10px;">
-                    <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">${t('خصم (جنيه)', 'Discount (EGP)')}</label>
-                    <input type="number" id="discountInput" class="mono" min="0" step="0.5" value="0" placeholder="0" oninput="updatePaymentCalculation()" style="width:100%;">
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-weight:700;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-bottom:10px;">
-                    <span>${t('الإجمالي بعد الخصم', 'Total After Discount')}</span>
-                    <span class="mono" id="finalTotalDisplay" style="color:var(--amber);font-size:16px;">${moneyDec(totals.grandTotal)}</span>
-                </div>
-                ${endSessionPrepaidTotal > 0 ? `
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 10px;font-weight:700;">
-                    <span style="color:var(--teal);">${t('المتبقي بعد خصم الدفعة المقدمة', 'Remaining After Prepayment')}</span>
-                    <span class="mono" id="remainingDueDisplay" style="color:var(--teal);font-size:16px;">${moneyDec(Math.max(0, totals.grandTotal - endSessionPrepaidTotal))}</span>
-                </div>
-                ` : ''}
-                <div style="margin-bottom:8px;">
-                    <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">${t('العميل دفع كام دلوقتي', 'Amount Customer Is Paying Now')}</label>
-                    <input type="number" id="amountPaidInput" class="mono" min="0" step="0.5" placeholder="${moneyDec(Math.max(0, totals.grandTotal - endSessionPrepaidTotal))}" oninput="updatePaymentCalculation()" style="width:100%;">
-                </div>
-                <div id="changeDueRow" style="display:none;justify-content:space-between;align-items:center;padding:8px 0 2px;font-weight:700;">
-                    <span id="changeDueLabel"></span>
-                    <span class="mono" id="changeDueAmount" style="font-size:16px;"></span>
-                </div>
-            </div>
-            <div class="section-title">${t('اختر طريقة الدفع', 'Select Payment Method')}</div>`;
-        
-        if (activeMethods.length === 0) {
-            paymentHtml += `
-                <div class="empty" style="padding:20px;">
-                    <i class="fa-solid fa-credit-card"></i>
-                    ${t('مفيش طرق دفع مفعلة — روح الإعدادات وضيف طريقة', 'No active payment methods — go to settings and add one')}
-                </div>
-                <button class="btn btn-ghost btn-block" onclick="cancelEndSession()">${t('رجوع', 'Back')}</button>`;
-        } else {
-            paymentHtml += `
-                <div class="payment-options" id="paymentOptions">
-                    ${activeMethods.map(pm => `
-                        <div class="payment-option" data-id="${pm.id}" style="cursor:pointer;">
-                            <i class="fa-solid ${pm.icon}"></i>
-                            ${escapeHtml(pm.name)}
-                        </div>
-                    `).join('')}
-                </div>
-                <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
-                    <button class="btn btn-ghost" style="flex:1;" onclick="cancelEndSession()">${t('رجوع', 'Back')}</button>
-                    <button class="btn btn-amber" style="flex:1;" id="confirmEndBtn" onclick="confirmEndSessionWithPayment()" disabled>
-                        <i class="fa-solid fa-check"></i> ${t('تأكيد الدفع', 'Confirm Payment')}
-                    </button>
-                    <button class="btn btn-teal" style="flex:1;" id="printReceiptBtn" onclick="printReceipt()" disabled>
-                        <i class="fa-solid fa-print"></i> ${t('طباعة', 'Print')}
-                    </button>
-                </div>`;
-        }
-        
-        paymentHtml += `<div class="error-text" id="endSessionError"></div>`;
-        body.innerHTML = paymentHtml;
-        
-        document.querySelectorAll('.payment-option').forEach(el => {
-            el.addEventListener('click', function() {
-                const pmId = this.dataset.id;
-                if (pmId) {
-                    selectPaymentMethod(pmId);
-                }
-            });
-        });
-        
-        selectedPaymentMethod = null;
-        
-    } catch (e) {
-        console.error('Error in proceedToEndSession:', e);
-        endingSessionInProgress = false;
-        showToast(t('حصل خطأ، حاول تاني.', 'Error, try again.'), 'error');
-    }
-}
-
-// ============================================================
-// SELECT PAYMENT METHOD
-// ============================================================
-function selectPaymentMethod(pmId) {
-    selectedPaymentMethod = pmId;
-    
-    document.querySelectorAll('.payment-option').forEach(el => {
-        el.classList.remove('selected');
-    });
-    
-    document.querySelectorAll('.payment-option').forEach(el => {
-        if (el.dataset.id === pmId) {
-            el.classList.add('selected');
-        }
-    });
-    
-    const confirmBtn = document.getElementById('confirmEndBtn');
-    if (confirmBtn) {
-        confirmBtn.disabled = false;
-    }
-    
-    const printBtn = document.getElementById('printReceiptBtn');
-    if (printBtn) {
-        printBtn.disabled = false;
-    }
-}
-
-// ============================================================
-// ✅ حساب الخصم والباقي أثناء الدفع
-// ============================================================
-function updatePaymentCalculation() {
-    if (!currentEndSessionTotals) return;
-    const grandTotal = currentEndSessionTotals.grandTotal;
-
-    const discountInput = document.getElementById('discountInput');
-    let discount = Math.max(0, parseFloat(discountInput.value) || 0);
-    if (discount > grandTotal) {
-        discount = grandTotal;
-        discountInput.value = discount;
-    }
-    const finalTotal = Math.round((grandTotal - discount) * 100) / 100;
-    const finalTotalEl = document.getElementById('finalTotalDisplay');
-    if (finalTotalEl) finalTotalEl.textContent = moneyDec(finalTotal);
-
-    // ✅ المتبقي على العميل فعلياً دلوقتي = الإجمالي بعد الخصم ناقص أي دفعة مقدمة
-    const prepaid = Math.min(endSessionPrepaidTotal || 0, finalTotal);
-    const remainingDue = Math.max(0, Math.round((finalTotal - prepaid) * 100) / 100);
-    const remainingDueEl = document.getElementById('remainingDueDisplay');
-    if (remainingDueEl) remainingDueEl.textContent = moneyDec(remainingDue);
-
-    const paidInput = document.getElementById('amountPaidInput');
-    const paidVal = paidInput ? paidInput.value.trim() : '';
-    const changeRow = document.getElementById('changeDueRow');
-    const changeLabel = document.getElementById('changeDueLabel');
-    const changeAmount = document.getElementById('changeDueAmount');
-
-    if (paidVal === '') {
-        if (changeRow) changeRow.style.display = 'none';
-        endSessionAmountPaid = null;
-    } else {
-        const paid = Math.max(0, parseFloat(paidVal) || 0);
-        const diff = Math.round((paid - remainingDue) * 100) / 100;
-        if (changeRow) changeRow.style.display = 'flex';
-        if (diff >= 0) {
-            if (changeLabel) changeLabel.textContent = t('الباقي للعميل', 'Change Due to Customer');
-            if (changeAmount) { changeAmount.textContent = moneyDec(diff); changeAmount.style.color = 'var(--teal)'; }
-        } else {
-            if (changeLabel) changeLabel.textContent = t('باقي على العميل', 'Remaining Owed by Customer');
-            if (changeAmount) { changeAmount.textContent = moneyDec(Math.abs(diff)); changeAmount.style.color = '#ff6b6b'; }
-        }
-        endSessionAmountPaid = paid;
-    }
-
-    endSessionDiscount = discount;
-}
-
-// ============================================================
-// CANCEL END SESSION (Back button)
-// ============================================================
-function cancelEndSession() {
-    const stationId = endSessionStationId || activeStationId;
-    endingSessionInProgress = false;
-    if (stationId) {
-        closeSheet('stationOverlay');
-        setTimeout(() => {
-            openStationSheet(stationId);
-        }, 200);
-    } else {
-        closeSheet('stationOverlay');
-        navigateTo('view-stations');
-    }
-}
-
-// ============================================================
-// CONFIRM END SESSION WITH PAYMENT
-// ============================================================
-async function confirmEndSessionWithPayment() {
-    if (!selectedPaymentMethod) {
-        document.getElementById('endSessionError').textContent = t('اختر طريقة دفع أولاً.', 'Select a payment method first.');
-        return;
-    }
-    const stationId = endSessionStationId;
-    const session = sessions[stationId];
-    if (!session) return;
-
-    try {
-        const activeSeg = await getActiveSegment(session.id);
-        if (activeSeg && !activeSeg.ended_at) {
-            const now = new Date(nowCorrected()).toISOString();
-            const start = new Date(activeSeg.started_at);
-            let hours = Math.max(0, (new Date(now) - start) / 3600000);
-            let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-            
-            if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-                const elapsedSeconds = (new Date(now) - start) / 1000;
-                const usedSeconds = Math.min(elapsedSeconds, activeSeg.duration_seconds);
-                hours = usedSeconds / 3600;
-                amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-            }
-            
-            await closeSegment(activeSeg.id, now, amount);
-        }
-
-        const totals = await calculateTotalAmounts(session.id);
-        const discountAmount = Math.min(Math.max(0, endSessionDiscount || 0), totals.grandTotal);
-        const finalTotal = Math.round((totals.grandTotal - discountAmount) * 100) / 100;
-
-        const basePayload = {
-            status: 'completed',
-            ended_at: new Date(nowCorrected()).toISOString(),
-            amount: finalTotal,
-            payment_method: selectedPaymentMethod
-        };
-
-        // بنحاول نحفظ الخصم والمبلغ المدفوع كمان؛ لو الأعمدة دي لسه مش
-        // مضافة في قاعدة البيانات (discount / amount_paid)، بنرجع نحفظ
-        // بدونها عشان قفل الجلسة ميفشلش خالص.
-        let { error } = await supabaseClient.from('sessions').update({
-            ...basePayload,
-            discount: discountAmount,
-            amount_paid: endSessionAmountPaid
-        }).eq('id', session.id);
-
-        if (error && /column .* does not exist/i.test(error.message || '')) {
-            console.warn('discount/amount_paid columns missing — saving without them:', error.message);
-            ({ error } = await supabaseClient.from('sessions').update(basePayload).eq('id', session.id));
-        }
-        
-        if (error) {
-            console.error('Error ending session:', error);
-            endingSessionInProgress = false;
-            showToast(t('فشل إنهاء الجلسة: ' + error.message, 'Failed to end session: ' + error.message), 'error');
-            return;
-        }
-        
-        const savedStationId = stationId;
-        
-        // نثبّت قيمة الخصم النهائية (بعد أي clamp) عشان الإيصال يعرضها صح
-        endSessionDiscount = discountAmount;
-        
-        delete sessions[stationId];
-        renderStationsGrid();
-        closeSheet('stationOverlay');
-        const pm = paymentMethods.find(p => p.id === selectedPaymentMethod);
-        showToast(`${t('اتقفلت الجلسة —', 'Session closed —')} ${moneyDec(finalTotal)} ${t('ج', 'EGP')} (${pm ? pm.name : ''})`, 'success');
-        
-        await renderDashboard();
-        if (document.getElementById('view-shift').classList.contains('active')) {
-            await renderShiftView();
-        }
-        
-        setTimeout(() => {
-            printReceipt();
-        }, 500);
-    } catch (e) {
-        console.error('Error in confirmEndSessionWithPayment:', e);
-        endingSessionInProgress = false;
-        showToast(t('حصل خطأ، حاول تاني.', 'Error, try again.'), 'error');
-    }
-}
-
-// ============================================================
-// PRINT RECEIPT
-// ============================================================
-function printReceipt() {
-    if (!selectedPaymentMethod) {
-        showToast(t('اختر طريقة دفع أولاً.', 'Select a payment method first.'), 'warning');
-        return;
-    }
-    
-    const stationId = endSessionStationId || activeStationId;
-    const session = sessions[stationId];
-    if (!session) {
-        showToast(t('جاري تحضير الإيصال...', 'Preparing receipt...'), 'warning');
-        return;
-    }
-    
-    calculateTotalAmounts(session.id).then(async (totals) => {
-        const { data: ordersDetails } = await supabaseClient
-            .from('session_orders')
-            .select('*')
-            .eq('session_id', session.id)
-            .order('created_at');
-        
-        const pm = paymentMethods.find(p => p.id === selectedPaymentMethod);
-        const station = stations.find(s => s.id === session.station_id);
-        const stationName = station ? (station.name || t('جهاز', 'Device') + ' ' + station.number) : t('جهاز', 'Device');
-        
-        let ordersReceiptHtml = '';
-        if (ordersDetails && ordersDetails.length > 0) {
-            ordersReceiptHtml = `
-                <hr style="border: none; border-top: 1px dashed #ccc; margin: 10px 0;">
-                <div style="font-size: 13px; margin-bottom: 8px;">
-                    <div style="font-weight:700;margin-bottom:4px;">${t('الطلبات', 'Orders')}</div>
-                    ${ordersDetails.map(o => `
-                        <div style="display:flex;justify-content:space-between;padding:2px 0;font-size:12px;">
-                            <span>${escapeHtml(o.item_name)} × ${o.quantity}</span>
-                            <span>${moneyDec(o.quantity * o.unit_price)} ${t('ج', 'EGP')}</span>
-                        </div>
-                    `).join('')}
-                    <div style="display:flex;justify-content:space-between;padding:3px 0;border-top:1px solid #eee;margin-top:4px;padding-top:4px;font-weight:600;">
-                        <span>${t('إجمالي الطلبات', 'Orders Total')}</span>
-                        <span>${moneyDec(totals.ordersTotal)} ${t('ج', 'EGP')}</span>
-                    </div>
-                </div>
-            `;
-        }
-        
-        const receiptContent = `
-            <div style="font-family: 'Cairo', Arial, sans-serif; padding: 20px; max-width: 300px; margin: 0 auto; direction: rtl; text-align: center; background: #fff; color: #000;">
-                <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">${escapeHtml(business.name)}</div>
-                <div style="font-size: 12px; color: #666; margin-bottom: 12px;">${escapeHtml(business.code)}</div>
-                <hr style="border: none; border-top: 1px dashed #ccc; margin: 10px 0;">
-                <div style="font-size: 13px; margin-bottom: 8px;">
-                    <div style="display:flex;justify-content:space-between;padding:3px 0;">
-                        <span>${t('الجهاز', 'Device')}</span>
-                        <span>${escapeHtml(stationName)}</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;padding:3px 0;">
-                        <span>${t('الوقت', 'Time')}</span>
-                        <span>${new Date(session.started_at).toLocaleString(currentLang === 'ar' ? 'ar-EG' : 'en-US')}</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;padding:3px 0;">
-                        <span>${t('المدة', 'Duration')}</span>
-                        <span>${formatElapsed(new Date(session.started_at))}</span>
-                    </div>
-                </div>
-                <hr style="border: none; border-top: 1px dashed #ccc; margin: 10px 0;">
-                <div style="font-size: 13px; margin-bottom: 8px;">
-                    ${totals.singleTotal > 0 ? `
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;">
-                        <span>${t('Single', 'Single')}</span>
-                        <span>${moneyDec(totals.singleTotal)} ${t('ج', 'EGP')}</span>
-                    </div>
-                    ` : ''}
-                    ${totals.multiTotal > 0 ? `
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;">
-                        <span>${t('Multi', 'Multi')}</span>
-                        <span>${moneyDec(totals.multiTotal)} ${t('ج', 'EGP')}</span>
-                    </div>
-                    ` : ''}
-                </div>
-                ${ordersReceiptHtml}
-                <hr style="border: none; border-top: 1px dashed #ccc; margin: 10px 0;">
-                ${endSessionDiscount > 0 ? `
-                <div style="font-size: 13px; margin-bottom: 4px;">
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;">
-                        <span>${t('الإجمالي قبل الخصم', 'Total Before Discount')}</span>
-                        <span>${moneyDec(totals.grandTotal)} ${t('ج', 'EGP')}</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;color:#c0392b;">
-                        <span>${t('الخصم', 'Discount')}</span>
-                        <span>- ${moneyDec(endSessionDiscount)} ${t('ج', 'EGP')}</span>
-                    </div>
-                </div>
-                ` : ''}
-                <div style="font-size: 18px; font-weight: 700; color: #000; margin: 8px 0;">
-                    <div style="display:flex;justify-content:space-between;">
-                        <span>${t('الإجمالي', 'Total')}</span>
-                        <span>${moneyDec(Math.max(0, Math.round((totals.grandTotal - endSessionDiscount) * 100) / 100))} ${t('ج', 'EGP')}</span>
-                    </div>
-                </div>
-                ${endSessionAmountPaid !== null && endSessionAmountPaid !== undefined ? `
-                <div style="font-size: 13px; margin-bottom: 8px;">
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;">
-                        <span>${t('دفع العميل', 'Amount Paid')}</span>
-                        <span>${moneyDec(endSessionAmountPaid)} ${t('ج', 'EGP')}</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:700;">
-                        <span>${endSessionAmountPaid >= (totals.grandTotal - endSessionDiscount) ? t('الباقي للعميل', 'Change Due') : t('باقي على العميل', 'Remaining Owed')}</span>
-                        <span>${moneyDec(Math.abs(Math.round((endSessionAmountPaid - (totals.grandTotal - endSessionDiscount)) * 100) / 100))} ${t('ج', 'EGP')}</span>
-                    </div>
-                </div>
-                ` : ''}
-                <div style="font-size: 13px; margin: 8px 0;">
-                    <div style="display:flex;justify-content:space-between;padding:2px 0;">
-                        <span>${t('طريقة الدفع', 'Payment Method')}</span>
-                        <span>${pm ? escapeHtml(pm.name) : t('غير محدد', 'Not set')}</span>
-                    </div>
-                </div>
-                <hr style="border: none; border-top: 1px dashed #ccc; margin: 10px 0;">
-                <div style="font-size: 11px; color: #999; margin-top: 8px;">
-                    ${t('شكراً لزيارتكم', 'Thank you for your visit')}
-                </div>
-                <div style="font-size: 10px; color: #aaa; margin-top: 4px;">
-                    ${new Date().toLocaleString(currentLang === 'ar' ? 'ar-EG' : 'en-US')}
-                </div>
-            </div>
-        `;
-        
-        const printWindow = window.open('', '_blank', 'width=400,height=600');
-        if (!printWindow) {
-            showToast(t('الرجاء السماح للنوافذ المنبثقة', 'Please allow popups'), 'error');
-            return;
-        }
-        
-        printWindow.document.write(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>${t('إيصال', 'Receipt')}</title>
-                <meta charset="UTF-8">
-                <style>
-                    @page { margin: 10px; size: auto; }
-                    body { font-family: 'Cairo', Arial, sans-serif; margin: 0; padding: 0; background: #fff; }
-                    @media print {
-                        body { background: #fff; }
-                        .no-print { display: none; }
-                    }
-                </style>
-            </head>
-            <body>
-                ${receiptContent}
-                <div style="text-align:center;margin-top:12px;" class="no-print">
-                    <button onclick="window.print()" style="padding:10px 30px;background:#ff8a1e;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;">
-                        🖨️ ${t('طباعة', 'Print')}
-                    </button>
-                    <button onclick="window.close()" style="padding:10px 30px;background:#666;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;margin-right:8px;">
-                        ✕ ${t('إغلاق', 'Close')}
-                    </button>
-                </div>
-                <script>
-                    setTimeout(() => { window.print(); }, 500);
-                <\/script>
-            </body>
-            </html>
-        `);
-        printWindow.document.close();
-    });
-}
-
-// ============================================================
-// EXPENSES
-// ============================================================
-function openExpenseSheet() { document.getElementById('expenseDesc').value = ''; document.getElementById('expenseAmount').value = ''; document.getElementById('expenseError').textContent = ''; openSheet('expenseOverlay'); }
-async function submitExpense() {
-    const description = document.getElementById('expenseDesc').value.trim();
-    const amount = parseFloat(document.getElementById('expenseAmount').value);
-    const errEl = document.getElementById('expenseError');
-    errEl.textContent = '';
-    if (!description || !Number.isFinite(amount) || amount <= 0) { errEl.textContent = t('اكتب وصف ومبلغ صحيح.', 'Enter a valid description and amount.'); return; }
-    if (!currentShift?.id) { errEl.textContent = t('مفيش شيفت مفتوح.', 'No open shift.'); return; }
-    try {
-        const { error } = await supabaseClient.from('expenses').insert({ business_id: business.id, shift_id: currentShift.id, description, amount });
-        if (error) throw error;
-        closeSheet('expenseOverlay');
-        showToast(t('تم تسجيل المصروف', 'Expense recorded'), 'success');
-        renderDashboard();
-        if (document.getElementById('view-shift').classList.contains('active')) renderShiftView();
-    } catch (e) {
-        console.error('Error saving expense:', e);
-        errEl.textContent = t('فشل تسجيل المصروف.', 'Failed to save expense.');
-    }
-}
-
-// ============================================================
-// SHIFT
-// ============================================================
-async function getShiftTotals(shift) {
-    try {
-        // ✅ الاستعلامين دول مستقلين عن بعض (مبنيين على شيفت واحد بس)، فبنجيبهم مع بعض
-        // على التوازي بدل ما نستنى واحد بعد التاني — ده بيقلل عدد رحلات الشبكة المتتالية
-        const [{ data: sessRows }, { data: expRows }] = await Promise.all([
-            supabaseClient
-                .from('sessions')
-                .select('id, amount, payment_method')
-                .eq('business_id', business.id)
-                .eq('status', 'completed')
-                .gte('ended_at', shift.opened_at)
-                .lte('ended_at', shift.closed_at || new Date().toISOString()),
-            supabaseClient
-                .from('expenses')
-                .select('description, amount')
-                .eq('shift_id', shift.id)
-        ]);
-        
-        const revenue = (sessRows || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-
-        const sessionIds = (sessRows || []).map(r => r.id);
-        let itemsRevenue = 0;
-        const itemBreakdown = {};
-        if (sessionIds.length > 0) {
-            const { data: orderRows } = await supabaseClient
-                .from('session_orders')
-                .select('item_name, quantity, unit_price, session_id')
-                .in('session_id', sessionIds);
-            (orderRows || []).forEach(o => {
-                const lineTotal = Number(o.quantity || 0) * Number(o.unit_price || 0);
-                itemsRevenue += lineTotal;
-                itemBreakdown[o.item_name] = (itemBreakdown[o.item_name] || 0) + lineTotal;
-            });
-        }
-        const hoursRevenue = Math.max(0, revenue - itemsRevenue);
-        
-        const expenses = (expRows || []).reduce((s, r) => s + Number(r.amount || 0), 0);
-        
-        return { 
-            revenue, 
-            expenses, 
-            profit: revenue - expenses, 
-            expenseRows: expRows || [], 
-            sessions: sessRows || [],
-            hoursRevenue,
-            itemsRevenue,
-            itemBreakdown
-        };
-    } catch (e) {
-        console.error('Error getting shift totals:', e);
-        return { revenue: 0, expenses: 0, profit: 0, expenseRows: [], sessions: [], hoursRevenue: 0, itemsRevenue: 0, itemBreakdown: {} };
-    }
-}
-
-async function renderShiftView() {
-    // ✅ نتأكد إن التابات وصف الفلتر الشهري متزامنين مع shiftFilter الحالي
-    // من أول ما الشاشة تتفتح، مش بس لما المستخدم يدوس على تاب — عشان كده
-    // كانت شاشة الفلترة بتظهر غلط أول ما السايت يتفتح
-    document.querySelectorAll('.shift-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.filter === shiftFilter);
-    });
-    const monthlyFilterEl = document.getElementById('monthlyFilter');
-    if (monthlyFilterEl) {
-        monthlyFilterEl.style.display = shiftFilter === 'monthly' ? 'flex' : 'none';
-    }
-
-    if (!currentShift) {
-        document.getElementById('shiftSummary').innerHTML = `
-            <div class="empty" style="padding:20px;">
-                <i class="fa-solid fa-clock" style="font-size:32px;"></i>
-                <div style="font-size:16px;font-weight:700;margin:10px 0;">${t('لا يوجد شيفت مفتوح', 'No open shift')}</div>
-                <button class="btn btn-amber btn-block" onclick="openNewShift()"><i class="fa-solid fa-plus"></i> ${t('فتح شيفت جديد', 'Open New Shift')}</button>
-            </div>
-        `;
-        return;
-    }
-    
-    const totals = await getShiftTotals(currentShift);
-    document.getElementById('shiftSummary').innerHTML = `
-        <div class="list-row"><div class="row-title">${t('وقت الفتح', 'Opened At')}</div><div class="row-value mono">${new Date(currentShift.opened_at).toLocaleTimeString(currentLang === 'ar' ? 'ar-EG' : 'en-US')}</div></div>
-        <div class="list-row"><div class="row-title">${t('الإيراد', 'Revenue')}</div><div class="row-value mono">${money(totals.revenue)}</div></div>
-        <div class="list-row"><div class="row-title">${t('المصروفات', 'Expenses')}</div><div class="row-value mono">${money(totals.expenses)}</div></div>
-        <div class="list-row"><div class="row-title">${t('الصافي', 'Net Income')}</div><div class="row-value mono" style="color:var(--amber);">${money(totals.profit)}</div></div>`;
-
-    const pmBreakdown = {};
-    totals.sessions.forEach(s => {
-        if (s.payment_method) {
-            const pm = paymentMethods.find(p => p.id === s.payment_method);
-            const key = pm ? pm.name : s.payment_method;
-            pmBreakdown[key] = (pmBreakdown[key] || 0) + Number(s.amount || 0);
-        }
-    });
-    if (Object.keys(pmBreakdown).length > 0) {
-        let pmHtml = `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">`;
-        pmHtml += `<div style="font-size:12px;color:var(--text-dim);font-weight:600;margin-bottom:6px;">${t('توزيع الإيراد حسب طريقة الدفع', 'Revenue by Payment Method')}</div>`;
-        Object.entries(pmBreakdown).forEach(([name, amount]) => {
-            pmHtml += `<div class="list-row" style="padding:6px 0;"><div class="row-title" style="font-size:13px;">${escapeHtml(name)}</div><div class="row-value mono" style="font-size:14px;">${money(amount)}</div></div>`;
-        });
-        pmHtml += `</div>`;
-        document.getElementById('shiftSummary').innerHTML += pmHtml;
-    }
-
-    let query = supabaseClient
-        .from('shifts')
-        .select('*')
-        .eq('business_id', business.id)
-        .eq('status', 'closed')
-        .order('closed_at', { ascending: false });
-    
-    const now = new Date();
-    
-    if (shiftFilter === 'weekly') {
-        const weekAgo = new Date(now);
-        weekAgo.setDate(weekAgo.getDate() - 7);
-        query = query.gte('closed_at', weekAgo.toISOString());
-    } else if (shiftFilter === 'monthly') {
-        const monthSelect = document.getElementById('monthSelect');
-        const yearSelect = document.getElementById('yearSelect');
-        const selectedMonth = parseInt(monthSelect ? monthSelect.value : now.getMonth());
-        const selectedYear = parseInt(yearSelect ? yearSelect.value : now.getFullYear());
-        
-        const startDate = new Date(selectedYear, selectedMonth, 1);
-        const endDate = new Date(selectedYear, selectedMonth + 1, 1);
-        
-        query = query
-            .gte('closed_at', startDate.toISOString())
-            .lt('closed_at', endDate.toISOString());
-    }
-    
-    // ✅ Limit to last 30 shifts for performance
-    const { data: pastShifts } = await query.limit(30);
-    
-    const histEl = document.getElementById('shiftHistory');
-    
-    if (!pastShifts || pastShifts.length === 0) {
-        let filterLabel = '';
-        if (shiftFilter === 'all') {
-            filterLabel = t('كل الشيفتات', 'All shifts');
-        } else if (shiftFilter === 'weekly') {
-            filterLabel = t('الآسبوع الماضي', 'Last week');
-        } else if (shiftFilter === 'monthly') {
-            const monthSelect = document.getElementById('monthSelect');
-            const yearSelect = document.getElementById('yearSelect');
-            const monthNames = currentLang === 'ar' 
-                ? ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
-                : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const monthName = monthNames[parseInt(monthSelect ? monthSelect.value : new Date().getMonth())];
-            const year = yearSelect ? yearSelect.value : new Date().getFullYear();
-            filterLabel = `${monthName} ${year}`;
-        }
-        histEl.innerHTML = `<div class="empty"><i class="fa-solid fa-clock-rotate-left"></i>${t('مفيش شيفتات مقفولة في ', 'No closed shifts in ')} ${filterLabel}</div>`;
-        return;
-    }
-
-    // ✅ Load all shift totals in parallel for better performance
-    const shiftPromises = pastShifts.map(shift => getShiftTotals(shift));
-    const shiftTotalsResults = await Promise.all(shiftPromises);
-    
-    let historyHtml = '';
-    for (let i = 0; i < pastShifts.length; i++) {
-        const shift = pastShifts[i];
-        const shiftTotals = shiftTotalsResults[i];
-        const dateStr = new Date(shift.closed_at).toLocaleDateString(currentLang === 'ar' ? 'ar-EG' : 'en-US');
-        const timeStr = new Date(shift.closed_at).toLocaleTimeString(currentLang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' });
-        const revLabel = t('إيراد', 'Revenue');
-        const expLabel = t('مصروفات', 'Expenses');
-        const netLabel = t('صافي الدخل', 'Net Income');
-        
-        // ✅ Show who closed the shift with a small orange badge
-        const closedBy = shift.closed_by || t('غير معروف', 'Unknown');
-        const closedByBadge = `<span class="badge badge-amber" style="font-size:9px;padding:1px 8px;">👤 ${escapeHtml(closedBy)}</span>`;
-        
-        historyHtml += `
-            <div class="list-row" style="flex-direction:column;align-items:stretch;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="viewShiftDetails('${shift.id}')">
-                <div style="display:flex;justify-content:space-between;width:100%;margin-bottom:6px;">
-                    <div class="row-title" style="display:flex;align-items:center;gap:8px;font-size:13px;">
-                        ${dateStr} - ${timeStr}
-                        ${closedByBadge}
-                    </div>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <div style="display:flex;gap:12px;font-size:12px;color:var(--text-dim);">
-                            <span>${revLabel} <span class="mono" style="color:var(--text);">${money(shiftTotals.revenue)}</span></span>
-                            <span>${expLabel} <span class="mono" style="color:var(--text);">${money(shiftTotals.expenses)}</span></span>
-                        </div>
-                        <button class="btn btn-danger-sm" onclick="event.stopPropagation(); deleteShift('${shift.id}')" title="${t('حذف الشيفت', 'Delete shift')}" style="padding:4px 8px;font-size:11px;">
-                            <i class="fa-solid fa-xmark"></i>
-                        </button>
-                    </div>
-                </div>
-                <div style="display:flex;justify-content:space-between;width:100%;">
-                    <div style="font-size:12px;color:var(--text-faint);">${netLabel}</div>
-                    <div class="mono" style="font-weight:700;color:var(--amber);">${money(shiftTotals.profit)} ${t('ج', 'EGP')}</div>
-                </div>
-            </div>
-        `;
-    }
-    histEl.innerHTML = historyHtml;
-}
-
-async function openNewShift() {
-    try {
-        const { data: created } = await supabaseClient.from('shifts').insert({ 
-            business_id: business.id,
-            opened_at: new Date().toISOString(),
-            status: 'open'
-        }).select().single();
-        currentShift = created;
-        showToast(t('تم فتح شيفت جديد', 'New shift opened'), 'success');
-        renderShiftView();
-        renderDashboard();
-    } catch (e) {
-        console.error('Error opening new shift:', e);
-        showToast(t('فشل فتح الشيفت', 'Failed to open shift'), 'error');
-    }
-}
-
-async function deleteShift(shiftId) {
-    if (!confirm(t('هل أنت متأكد من حذف هذا الشيفت؟ سيتم حذف كل الجلسات والمصروفات المرتبطة به فقط.', 'Are you sure you want to delete this shift? Only the sessions and expenses that belong to it will be deleted.'))) return;
-    
-    try {
-        const { data: shift, error: shiftErr } = await supabaseClient.from('shifts').select('*').eq('id', shiftId).single();
-        if (shiftErr || !shift) {
-            showToast(t('تعذر إيجاد الشيفت', 'Could not find the shift'), 'error');
-            console.error('Error loading shift to delete:', shiftErr);
-            return;
-        }
-        const rangeEnd = shift.closed_at || new Date().toISOString();
-
-        await supabaseClient.from('expenses').delete().eq('shift_id', shiftId);
-        
-        const { data: sessionsToDelete } = await supabaseClient
-            .from('sessions')
-            .select('id')
-            .eq('business_id', business.id)
-            .eq('status', 'completed')
-            .gte('ended_at', shift.opened_at)
-            .lte('ended_at', rangeEnd);
-        
-        if (sessionsToDelete && sessionsToDelete.length > 0) {
-            const sessionIds = sessionsToDelete.map(s => s.id);
-            await supabaseClient.from('session_orders').delete().in('session_id', sessionIds);
-            await supabaseClient.from('sessions').delete().in('id', sessionIds);
-        }
-        
-        await supabaseClient.from('shifts').delete().eq('id', shiftId);
-        
-        showToast(t('تم حذف الشيفت', 'Shift deleted'), 'success');
-        renderShiftView();
-        renderDashboard();
-    } catch (e) {
-        console.error('Error deleting shift:', e);
-        showToast(t('فشل حذف الشيفت', 'Failed to delete shift'), 'error');
-    }
-}
-
-function buildShiftBreakdownHtml(totals, extraRowsHtml) {
-    const itemEntries = Object.entries(totals.itemBreakdown);
-    const itemsHtml = itemEntries.length
-        ? itemEntries.map(([name, amt]) =>
-            `<div class="list-row"><div class="row-title">${escapeHtml(name)}</div><div class="row-value mono">${money(amt)}</div></div>`
-          ).join('')
-        : `<div class="empty" style="padding:10px 0;">${t('لا يوجد طلبات منيو في هذا الشيفت', 'No menu orders this shift')}</div>`;
-
-    const expensesHtml = totals.expenseRows.length
-        ? totals.expenseRows.map(e =>
-            `<div class="list-row"><div class="row-title">${escapeHtml(e.description)}</div><div class="row-value mono">${money(e.amount)}</div></div>`
-          ).join('')
-        : `<div class="empty" style="padding:10px 0;">${t('لا يوجد مصروفات في هذا الشيفت', 'No expenses this shift')}</div>`;
-
-    return `
-        <div class="list-row"><div class="row-title">${t('إيراد الساعات', 'Hours Revenue')}</div><div class="row-value mono">${money(totals.hoursRevenue)}</div></div>
-        <div class="list-row"><div class="row-title">${t('إيراد المنيو', 'Menu Revenue')}</div><div class="row-value mono">${money(totals.itemsRevenue)}</div></div>
-        <div class="list-row"><div class="row-title">${t('إجمالي الإيراد', 'Total Revenue')}</div><div class="row-value mono">${money(totals.revenue)}</div></div>
-        <div class="list-row"><div class="row-title">${t('المصروفات', 'Expenses')}</div><div class="row-value mono">${money(totals.expenses)}</div></div>
-        <div class="list-row"><div class="row-title">${t('الصافي', 'Net Income')}</div><div class="row-value mono">${money(totals.profit)}</div></div>
-        ${extraRowsHtml || ''}
-        <div class="section-title" style="margin:14px 0 6px;">${t('إيراد المنيو حسب الصنف', 'Menu Revenue by Item')}</div>
-        ${itemsHtml}
-        <div class="section-title" style="margin:14px 0 6px;">${t('المصروفات المسجلة في الشيفت', 'Expenses Recorded This Shift')}</div>
-        ${expensesHtml}`;
-}
-
-async function openCloseShiftSheet() {
-    if (!currentShift) {
-        showToast(t('لا يوجد شيفت مفتوح', 'No open shift'), 'warning');
-        return;
-    }
-    const totals = await getShiftTotals(currentShift);
-    const extraRow = `<div class="list-row"><div class="row-title">${t('أجهزة لسه شغالة', 'Active Devices')}</div><div class="row-value mono">${Object.keys(sessions).length}</div></div>`;
-    document.getElementById('closeShiftSummary').innerHTML = buildShiftBreakdownHtml(totals, extraRow);
-    openSheet('closeShiftOverlay');
-}
-
-async function viewShiftDetails(shiftId) {
-    const { data: shift, error } = await supabaseClient.from('shifts').select('*').eq('id', shiftId).single();
-    if (error || !shift) {
-        showToast(t('تعذر تحميل تفاصيل الشيفت', 'Could not load shift details'), 'error');
-        console.error('Error loading shift details:', error);
-        return;
-    }
-    const totals = await getShiftTotals(shift);
-    const openedStr = new Date(shift.opened_at).toLocaleString(currentLang === 'ar' ? 'ar-EG' : 'en-US');
-    const closedStr = shift.closed_at ? new Date(shift.closed_at).toLocaleString(currentLang === 'ar' ? 'ar-EG' : 'en-US') : '—';
-    const extraRows = `
-        <div class="list-row"><div class="row-title">${t('وقت الفتح', 'Opened At')}</div><div class="row-value mono">${openedStr}</div></div>
-        <div class="list-row"><div class="row-title">${t('وقت الإقفال', 'Closed At')}</div><div class="row-value mono">${closedStr}</div></div>`;
-    document.getElementById('shiftDetailsSummary').innerHTML = buildShiftBreakdownHtml(totals, extraRows);
-    openSheet('shiftDetailsOverlay');
-}
-
-async function confirmCloseShift() {
-    if (!currentShift) return;
-    const totals = await getShiftTotals(currentShift);
-    const closedAt = new Date().toISOString();
-    
-    // ✅ Get the name of who's closing the shift
-    const closedByName = currentUser ? (currentUser.name || currentUser.type || t('غير معروف', 'Unknown')) : t('غير معروف', 'Unknown');
-    
-    const { data, error } = await supabaseClient
-        .from('shifts')
-        .update({ 
-            status: 'closed', 
-            closed_at: closedAt, 
-            total_revenue: totals.revenue, 
-            total_expenses: totals.expenses, 
-            total_profit: totals.profit, 
-            closed_by: closedByName
-        })
-        .eq('id', currentShift.id)
-        .select();
-    
-    if (error) {
-        showToast(t('فشل إقفال الشيفت: ' + error.message, 'Failed to close shift: ' + error.message), 'error');
-        console.error('Error closing shift:', error);
-        return;
-    }
-    if (!data || data.length === 0) {
-        console.error('Shift update affected 0 rows — check RLS UPDATE policy on "shifts" table.');
-        showToast(t('فشل إقفال الشيفت: قاعدة البيانات رفضت الحفظ (تحقق من صلاحيات RLS على جدول shifts)', 'Failed to close shift: database rejected the save (check RLS permissions on the shifts table)'), 'error');
-        return;
-    }
-    
-    closeSheet('closeShiftOverlay');
-    showToast(t('تم إقفال الشيفت', 'Shift closed'), 'success');
-    await loadOrOpenShift();
-    renderShiftView(); 
-    renderDashboard();
-}
-
-// ============================================================
-// SETTINGS
-// ============================================================
-function renderSettings() {
-    const expiry = deviceRecord.expiry_date ? new Date(deviceRecord.expiry_date) : null;
-    document.getElementById('settingsSubscription').innerHTML = `
-        <div class="list-row"><div class="row-title">${t('حالة الجهاز', 'Device Status')}</div><div class="badge ${deviceRecord.revoked ? 'badge-red' : 'badge-teal'}">${deviceRecord.revoked ? t('موقوف', 'Suspended') : t('نشط', 'Active')}</div></div>
-        <div class="list-row"><div class="row-title">${t('تاريخ الانتهاء', 'Expiry Date')}</div><div class="row-value mono">${expiry ? expiry.toLocaleDateString(currentLang === 'ar' ? 'ar-EG' : 'en-US') : '—'}</div></div>`;
-
-    // ============================================================
-    // ✅ TOGGLE PIN SECTION — مبني بالكامل من الـ JS عشان يشتغل من غير
-    // ما نحتاج نضيف عناصر ثابتة في الـ HTML يدويًا.
-    // بنستخدم wrapper بـ id ثابت عشان لو renderSettings() اتنادت تاني
-    // (بعد إضافة موظف/صنف مثلاً) منكررش القسم من جديد كل مرة.
-    // ============================================================
-    const pinToggleHtml = `
-        <div class="list-row" style="cursor:pointer;" onclick="toggleSettingsPin()">
-            <div class="row-title">${t('تغيير PIN المالك', 'Change Owner PIN')}</div>
-            <i id="settingsPinChevron" class="fa-solid fa-chevron-down" style="transition:transform .2s;color:var(--text-dim);"></i>
-        </div>
-        <div id="settingsChangePin" style="display:${settingsPinExpanded ? 'block' : 'none'};padding:10px 4px 4px;">
-            <div style="margin-bottom:10px;">
-                <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">${t('الـ PIN الحالي', 'Current PIN')}</label>
-                <input type="password" id="currentPinInput" class="mono" inputmode="numeric" maxlength="6" placeholder="••••" style="width:100%;">
-            </div>
-            <div style="margin-bottom:10px;">
-                <label style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;">${t('الـ PIN الجديد (4-6 أرقام)', 'New PIN (4-6 digits)')}</label>
-                <input type="password" id="newPinInput" class="mono" inputmode="numeric" maxlength="6" placeholder="••••" style="width:100%;">
-            </div>
-            <div id="changePinError" style="color:#ff6b6b;font-size:12px;margin-bottom:10px;"></div>
-            <button class="btn btn-teal btn-block" onclick="changeOwnerPin()">${t('حفظ الـ PIN الجديد', 'Save New PIN')}</button>
-        </div>`;
-    let pinToggleWrap = document.getElementById('settingsPinToggleWrap');
-    if (!pinToggleWrap) {
-        document.getElementById('settingsSubscription').insertAdjacentHTML('afterend', `<div id="settingsPinToggleWrap"></div>`);
-        pinToggleWrap = document.getElementById('settingsPinToggleWrap');
-    }
-    pinToggleWrap.innerHTML = pinToggleHtml;
-
-    const groupedMenu = {};
-    menuItems.forEach(item => {
-        const category = normalizeMenuCategory(item.category);
-        if (!groupedMenu[category]) groupedMenu[category] = [];
-        groupedMenu[category].push(item);
-    });
-    
-    let menuHtml = '';
-    if (menuItems.length === 0) {
-        menuHtml = `<div class="empty"><i class="fa-solid fa-utensils"></i>${t('لسه مفيش أصناف', 'No items yet')}</div>`;
-    } else {
-        for (const [category, items] of Object.entries(groupedMenu)) {
-            menuHtml += `<div class="menu-category-group">`;
-            menuHtml += `<div class="menu-category-title" style="color:var(--teal);">${escapeHtml(menuCategoryLabel(category))}</div>`;
-            items.forEach(m => {
-                menuHtml += `<div class="list-row">
-                    <div><div class="row-title">${escapeHtml(m.name)}</div><div class="row-sub">${escapeHtml(menuCategoryLabel(m.category))}</div></div>
-                    <div class="row-actions">
-                        <div class="row-value mono" style="margin-left:12px;">${money(m.price)}</div>
-                        <button class="btn btn-ghost btn-sm" onclick="editMenuItem('${m.id}')"><i class="fa-solid fa-pen"></i></button>
-                        <button class="btn btn-danger-sm" onclick="deleteMenuItemById('${m.id}')"><i class="fa-solid fa-trash"></i></button>
-                    </div>
-                </div>`;
-            });
-            menuHtml += `</div>`;
-        }
-    }
-    document.getElementById('settingsMenu').innerHTML = menuHtml;
-
-    document.getElementById('settingsEmployees').innerHTML = employees.length === 0
-        ? `<div class="empty"><i class="fa-solid fa-user-group"></i>${t('لسه مفيش موظفين', 'No employees yet')}</div>`
-        : employees.map(e => `
-            <div class="list-row">
-                <div class="row-title">${escapeHtml(e.name)}</div>
-                <div class="row-actions">
-                    <div class="badge ${e.active ? 'badge-teal' : 'badge-red'}">${e.active ? t('نشط', 'Active') : t('موقوف', 'Inactive')}</div>
-                    <button class="btn btn-danger-sm" onclick="deleteEmployee('${e.id}')" title="${t('حذف الموظف', 'Delete employee')}">
-                        <i class="fa-solid fa-trash"></i>
-                    </button>
-                </div>
-            </div>`).join('');
-    
-    // ✅ تحديث حالة الـ Toggle (PIN)
-    const pinSection = document.getElementById('settingsChangePin');
-    const chevron = document.getElementById('settingsPinChevron');
-    if (pinSection && chevron) {
-        pinSection.style.display = settingsPinExpanded ? 'block' : 'none';
-        chevron.style.transform = settingsPinExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
-    }
-}
-
-// ============================================================
-// 🔐 تغيير PIN المالك (جديد)
-// ============================================================
-async function changeOwnerPin() {
-    const currentPin = document.getElementById('currentPinInput').value.trim();
-    const newPin = document.getElementById('newPinInput').value.trim();
-    const errEl = document.getElementById('changePinError');
-    errEl.textContent = '';
-
-    if (!business) { 
-        errEl.textContent = t('❌ النشاط غير موجود.', '❌ Business not found.'); 
-        return; 
-    }
-    
-    // 🔍 التحقق من PIN الحالي
-    if (currentPin !== business.owner_pin) { 
-        errEl.textContent = t('❌ PIN الحالي غير صحيح.', '❌ Current PIN is incorrect.'); 
-        return; 
-    }
-    
-    // ✅ التحقق من PIN الجديد
-    if (!/^\d{4,6}$/.test(newPin)) { 
-        errEl.textContent = t('❌ PIN الجديد لازم يكون 4-6 أرقام.', '❌ New PIN must be 4-6 digits.'); 
-        return; 
-    }
-
-    try {
-        const { error } = await supabaseClient
-            .from('businesses')
-            .update({ owner_pin: newPin })
-            .eq('id', business.id);
-        
-        if (error) throw error;
-
-        // ✅ تحديث المتغير المحلي
-        business.owner_pin = newPin;
-        
-        // 🧹 تنظيف الحقول
-        document.getElementById('currentPinInput').value = '';
-        document.getElementById('newPinInput').value = '';
-        
-        showToast(t('✅ تم تغيير PIN المالك بنجاح.', '✅ Owner PIN changed successfully.'), 'success');
-    } catch (e) {
-        console.error('❌ Error changing PIN:', e);
-        errEl.textContent = t('❌ فشل تغيير PIN: ' + e.message, '❌ Failed to change PIN: ' + e.message);
-    }
-}
-
-// ============================================================
-// 🏢 إنشاء نشاط جديد من صفحة الدخول (جديد)
-// ============================================================
-function openCreateBusinessSheetFromSetup() {
-    ['newBizCodeSetup', 'newBizNameSetup', 'newBizPhoneSetup'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('newBizStationsSetup').value = 4;
-    document.getElementById('createBizErrorSetup').textContent = '';
-    openSheet('createBusinessSheetFromSetup');
-}
-
-async function submitCreateBusinessFromSetup() {
-    const code = document.getElementById('newBizCodeSetup').value.trim().toUpperCase();
-    const name = document.getElementById('newBizNameSetup').value.trim();
-    const phone = document.getElementById('newBizPhoneSetup').value.trim();
-    const total_stations = parseInt(document.getElementById('newBizStationsSetup').value) || 4;
-    const owner_pin = '0000'; // ✅ PIN افتراضي
-    const err = document.getElementById('createBizErrorSetup');
-
-    if (!code || !name) { 
-        err.textContent = t('❌ اكتب الكود والاسم.', '❌ Enter code and name.'); 
-        return; 
-    }
-
-    try {
-        const { error } = await supabaseClient.from('businesses').insert({ 
-            code, 
-            name, 
-            phone: phone || null, 
-            owner_pin, 
-            total_stations 
-        });
-        
-        if (error) {
-            if (error.code === '23505') {
-                err.textContent = t('❌ الكود ده مستخدم قبل كده.', '❌ Code already used.');
-            } else {
-                err.textContent = t('❌ فشل الإنشاء، حاول تاني.', '❌ Creation failed, try again.');
-            }
-            console.error('❌ Create business error:', error);
-            return;
-        }
-        
-        closeSheet('createBusinessSheetFromSetup');
-        showToast(t('✅ تم إنشاء النشاط! استخدم الكود لتسجيل الدخول.', '✅ Business created! Use the code to login.'), 'success');
-        
-        // 🚀 محاولة الدخول التلقائي
-        document.getElementById('setupBusinessCode').value = code;
-        handleSetupContinue();
-    } catch (e) {
-        console.error('❌ Error creating business:', e);
-        err.textContent = t('❌ حصل خطأ، حاول تاني.', '❌ Error, try again.');
-    }
-}
-
-function openMenuItemSheet() {
-    document.getElementById('menuItemId').value = '';
-    document.getElementById('menuItemName').value = '';
-    document.getElementById('menuItemPrice').value = '';
-    document.getElementById('menuItemCategory').value = 'cold_drinks';
-    document.getElementById('menuDeleteBtn').style.display = 'none';
-    document.getElementById('menuItemError').textContent = '';
-    document.getElementById('menuItemSheetTitle').textContent = t('إضافة صنف للقائمة', 'Add Menu Item');
-    openSheet('menuItemOverlay');
-}
-
-function editMenuItem(itemId) {
-    const item = menuItems.find(m => m.id === itemId);
-    if (!item) return;
-    document.getElementById('menuItemId').value = item.id;
-    document.getElementById('menuItemName').value = item.name;
-    document.getElementById('menuItemPrice').value = item.price;
-    document.getElementById('menuItemCategory').value = normalizeMenuCategory(item.category);
-    document.getElementById('menuDeleteBtn').style.display = 'flex';
-    document.getElementById('menuItemError').textContent = '';
-    document.getElementById('menuItemSheetTitle').textContent = t('تعديل صنف', 'Edit Item');
-    openSheet('menuItemOverlay');
-}
-
-async function submitMenuItem() {
-    const id = document.getElementById('menuItemId').value;
-    const name = document.getElementById('menuItemName').value.trim();
-    const price = parseFloat(document.getElementById('menuItemPrice').value);
-    const category = normalizeMenuCategory(document.getElementById('menuItemCategory').value);
-    const errEl = document.getElementById('menuItemError');
-    errEl.textContent = '';
-    
-    if (!name || isNaN(price) || price < 0) { 
-        errEl.textContent = t('اكمل البيانات.', 'Complete the data.'); 
-        return; 
-    }
-    
-    try {
-        const newItem = {
-            business_id: business.id,
-            name: name,
-            price: price,
-            category: category,
-            active: true,
-            created_at: new Date().toISOString()
-        };
-        
-        let result;
-        if (id) {
-            result = await updateMenuItemInDB(id, { name, price, category });
-            if (result) {
-                const idx = menuItems.findIndex(item => item.id === id);
-                if (idx !== -1) {
-                    menuItems[idx] = { ...menuItems[idx], name, price, category };
-                }
-                showToast(t('تم تحديث الصنف', 'Item updated'), 'success');
-            } else {
-                throw new Error('Update failed');
-            }
-        } else {
-            result = await saveMenuItemToDB(newItem);
-            if (result) {
-                menuItems.push(result);
-                showToast(t('تمت الإضافة', 'Item added'), 'success');
-            } else {
-                throw new Error('Insert failed');
-            }
-        }
-        
-        closeSheet('menuItemOverlay');
-        renderSettings();
-        renderMenuQuickAdd();
-        renderStationOrdersSection();
-    } catch (e) {
-        console.error('Error in submitMenuItem:', e);
-        let errorMsg = e.message || 'Unknown error';
-        if (errorMsg.includes('check constraint') || errorMsg.includes('menu_items_category_check')) {
-            errorMsg = 'مشكلة في قاعدة البيانات: عمود التصنيف لا يقبل هذه القيمة. شغّل ملف SQL الخاص بـ V2 على Supabase ثم جرّب مرة أخرى.';
-        }
-        errEl.textContent = t('حصل خطأ: ' + errorMsg, 'Error: ' + errorMsg);
-        showToast(t('فشل حفظ الصنف: ' + errorMsg, 'Failed to save item: ' + errorMsg), 'error');
-    }
-}
-
-async function deleteMenuItemById(itemId) {
-    if (!confirm(t('هل أنت متأكد من حذف هذا الصنف؟', 'Are you sure you want to delete this item?'))) return;
-    try {
-        const success = await deleteMenuItemFromDB(itemId);
-        if (success) {
-            menuItems = menuItems.filter(item => item.id !== itemId);
-            showToast(t('تم حذف الصنف', 'Item deleted'), 'success');
-            renderSettings();
-            renderMenuQuickAdd();
-            renderStationOrdersSection();
-        } else {
-            throw new Error('Delete failed');
-        }
-    } catch (e) {
-        showToast(t('فشل حذف الصنف', 'Failed to delete item'), 'error');
-        console.error(e);
-    }
-}
-
-async function deleteMenuItem() {
-    const id = document.getElementById('menuItemId').value;
-    if (!id) return;
-    closeSheet('menuItemOverlay');
-    await deleteMenuItemById(id);
-}
-
-function openEmployeeSheet() {
-    document.getElementById('employeeName').value = '';
-    document.getElementById('employeePin').value = '';
-    document.getElementById('employeeError').textContent = '';
-    document.getElementById('permStations').checked = true;
-    document.getElementById('permShift').checked = false;
-    document.getElementById('permSettings').checked = false;
-    openSheet('employeeOverlay');
-}
-async function submitEmployee() {
-    const name = document.getElementById('employeeName').value.trim();
-    const pin = document.getElementById('employeePin').value.trim();
-    if (!name || !/^\d{4,6}$/.test(pin)) { document.getElementById('employeeError').textContent = t('اكتب اسم و PIN من 4 لـ 6 أرقام.', 'Enter name and 4-6 digit PIN.'); return; }
-    const permissions = {
-        stations: document.getElementById('permStations').checked,
-        shift: document.getElementById('permShift').checked,
-        settings: document.getElementById('permSettings').checked
-    };
-    const { data, error } = await supabaseClient.from('employees').insert({ business_id: business.id, name, pin, permissions }).select();
-    if (error || !data || data.length === 0) {
-        document.getElementById('employeeError').textContent = t('فشل حفظ الموظف، حاول تاني.', 'Failed to save employee, try again.');
-        console.error('Error adding employee:', error);
-        return;
-    }
-    closeSheet('employeeOverlay'); showToast(t('تمت إضافة الموظف', 'Employee added'), 'success');
-    await loadEmployees(); renderSettings();
-}
-
-async function deleteEmployee(employeeId) {
-    if (!confirm(t('هل أنت متأكد من حذف هذا الموظف؟', 'Are you sure you want to delete this employee?'))) return;
-    try {
-        const { error } = await supabaseClient.from('employees').delete().eq('id', employeeId).eq('business_id', business.id);
-        if (error) throw error;
-        showToast(t('تم حذف الموظف', 'Employee deleted'), 'success');
-        await loadEmployees();
-        renderSettings();
-    } catch (e) {
-        console.error('Error deleting employee:', e);
-        showToast(t('فشل حذف الموظف', 'Failed to delete employee'), 'error');
-    }
-}
-
-function escapeHtml(str) { 
-    if (!str) return '';
-    const d = document.createElement('div'); 
-    d.textContent = str; 
-    return d.innerHTML; 
-}
-
-// ============================================================
-// SESSION RECOVERY
-// ============================================================
-async function recoverActiveSession() {
-    if (!business) return;
-    const { data: activeSessions } = await supabaseClient
-        .from('sessions')
-        .select('*')
-        .eq('business_id', business.id)
-        .eq('status', 'active');
-
-    if (activeSessions && activeSessions.length > 0) {
-        activeSessions.forEach(s => { sessions[s.station_id] = s; });
-        await preloadActiveSegments(activeSessions.map(s => s.id));
-        const missing = activeSessions.filter(s => !getActiveSegmentFast(s.id));
-        if (missing.length > 0) {
-            await Promise.all(missing.map(s => {
-                const st = stations.find(st => st.id === s.station_id);
-                const mode = s.current_mode || 'single';
-                const rate = mode === 'single' ? (st?.single_rate || 20) : (st?.multi_rate || 30);
-                return createSegment(s.id, mode, s.started_at, rate, s.timer_type || 'countup', 0);
-            }));
-        }
-        renderStationsGrid();
-        renderDashboard();
-    }
-}
-
-// ============================================================
-// REFRESH STATION SHEET CONTENT
-// ============================================================
-async function refreshStationSheetContent(stationId) {
-    const st = stations.find(s => s.id === stationId);
-    const session = sessions[stationId];
-    if (!session || !st) return;
-    
-    // ✅ تحديث الكاش عشان نجيب أحدث بيانات
-    sessionSegmentsCache[session.id] = null;
-    activeSegmentCache[session.id] = null;
-    
-    const body = document.getElementById('stationSheetBody');
-    if (!body) return;
-    
-    // ✅ الطلبات المستقلة عن بعض بتتجاب مرة واحدة على التوازي بدل التوالي
-    const [segments, ordersResult, prepaidTotal] = await Promise.all([
-        getSessionSegments(session.id),
-        supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at'),
-        getPrepaidTotal(session.id).catch(e => { console.warn('Error getting prepaid total:', e); return 0; })
-    ]);
-    const activeSeg = segments.find(s => !s.ended_at);
-    activeSegmentCache[session.id] = activeSeg || null;
-    activeSessionOrders = ordersResult.data || [];
-
-    // ✅ الحسابات دي بقت بتتم محليًا من غير أي طلب شبكة إضافي
-    const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
-
-    if (st.station_type === 'drinks') {
-        body.innerHTML = drinksTableSheetHtml(stationId, totals);
-        renderMenuQuickAdd();
-        renderStationOrdersSection();
-        return;
-    }
-
-    const currentEstimate = computeSegmentEstimate(activeSeg);
-    
-    const currentMode = activeSeg ? activeSeg.mode : (session.current_mode || 'single');
-    const currentRate = activeSeg ? activeSeg.rate : (st.single_rate || 20);
-    const modeLabel = currentMode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
-    const modeBadgeClass = currentMode === 'single' ? 'badge-mode-single' : 'badge-mode-multi';
-    const switchLabel = currentMode === 'single' ? t('تحويل إلى Multi', 'Switch to Multi') : t('تحويل إلى Single', 'Switch to Single');
-    const switchMode = currentMode === 'single' ? 'multi' : 'single';
-    const switchRate = switchMode === 'single' ? (st.single_rate || 20) : (st.multi_rate || 30);
-    
-    const timerType = activeSeg ? (activeSeg.timer_type || 'countup') : 'countup';
-    const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
-    const timerBadgeClass = timerType === 'countdown' ? 'badge-timer-down' : 'badge-timer-up';
-    const isCountdown = timerType === 'countdown';
-
-    const activeSegStart = activeSeg ? activeSeg.started_at : session.started_at;
-    const liveEarnedNow = activeSeg ? Math.round((Math.max(0, (nowCorrected() - new Date(activeSeg.started_at)) / 3600000) * Number(activeSeg.rate)) * 100) / 100 : 0;
-    const liveGrandTotal = Math.round((totals.grandTotal + liveEarnedNow) * 100) / 100;
-    
-    body.innerHTML = `
-        <div style="text-align:center;margin-bottom:12px;">
-            <div style="display:flex;justify-content:center;gap:8px;align-items:center;flex-wrap:wrap;">
-                <span class="badge ${modeBadgeClass}" style="font-size:13px;padding:4px 14px;">${modeLabel}</span>
-                <span class="badge ${timerBadgeClass}" style="font-size:11px;padding:3px 10px;">${timerLabel}</span>
-                <span class="badge badge-teal" style="font-size:13px;padding:4px 14px;">${money(currentRate)} ${t('ج/ساعة', 'EGP/hr')}</span>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-            <div class="stat-card" style="padding:10px;">
-                <div class="stat-label" style="font-size:10px;">${isCountdown ? t('الوقت المتبقي', 'Time Remaining') : t('إجمالي الجلسة', 'Total Session')}</div>
-                <div class="station-timer mono ${isCountdown ? 'countdown' : ''}" style="font-size:22px;" id="activeSessionTimer" data-start="${session.started_at}" data-station-id="${stationId}">${isCountdown ? formatCountdown(getRemainingSeconds(activeSeg)) : formatElapsed(new Date(session.started_at))}</div>
-            </div>
-            <div class="stat-card" style="padding:10px;border-color:${currentMode === 'single' ? 'var(--amber-dim)' : 'var(--teal-dim)'};">
-                <div class="stat-label" style="font-size:10px;">${t('الجزء الحالي', 'Current Segment')}</div>
-                <div class="station-timer mono" style="font-size:22px;color:${currentMode === 'single' ? 'var(--amber)' : 'var(--teal)'};" id="currentSegTimer" data-start="${activeSegStart}">${formatElapsed(new Date(activeSegStart))}</div>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-            <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px;text-align:center;">
-                <div style="font-size:10px;color:var(--text-dim);">${isCountdown ? t('قيمة الوقت المتبقي', 'Remaining Value') : t('قيمة الجزء الحالي', 'Current Segment Value')}</div>
-                <div class="mono" style="font-size:18px;font-weight:700;color:${currentMode === 'single' ? 'var(--amber)' : 'var(--teal)'};" id="currentSegAmount">${moneyDec(currentEstimate.amount)}</div>
-            </div>
-            <div style="background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px;text-align:center;">
-                <div style="font-size:10px;color:var(--text-dim);">${t('الإجمالي الكلي', 'Grand Total')}</div>
-                <div class="mono" style="font-size:18px;font-weight:700;color:var(--amber);" id="overallTotalAmount" data-base-total="${totals.grandTotal}">${moneyDec(liveGrandTotal)}</div>
-            </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-sunken);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;border:1px dashed ${totals.prepaidTotal > 0 ? 'var(--teal-dim)' : 'var(--border)'};">
-            <span style="font-size:12px;color:var(--text-dim);"><i class="fa-solid fa-money-bill-wave"></i> ${t('مدفوع مقدماً', 'Prepaid')}</span>
-            <span class="mono" style="font-size:15px;font-weight:700;color:${totals.prepaidTotal > 0 ? 'var(--teal)' : 'var(--text-faint)'};">${moneyDec(totals.prepaidTotal)} ${t('ج', 'EGP')}</span>
-        </div>
-        
-        ${segments.filter(s => s.ended_at).length > 0 ? `
-        <div class="segment-breakdown">
-            <div style="font-size:11px;color:var(--text-dim);font-weight:600;margin-bottom:4px;">${t('تفصيل الأجزاء السابقة', 'Previous Segments')}</div>
-            ${segments.filter(s => s.ended_at).map(s => {
-                const start2 = new Date(s.started_at);
-                const end = new Date(s.ended_at);
-                const mins = Math.round((end - start2) / 60000);
-                const amt = (s.amount !== null && s.amount !== undefined) ? Number(s.amount) : calculateSegmentAmountFromTimes(s.started_at, s.ended_at, s.rate);
-                const modeClass = s.mode === 'single' ? 'seg-mode-single' : 'seg-mode-multi';
-                const modeLabel2 = s.mode === 'single' ? t('Single', 'Single') : t('Multi', 'Multi');
-                const segTimerType = s.timer_type || 'countup';
-                const timerLabel2 = segTimerType === 'countdown' ? '⬇️' : '⬆️';
-                return `<div class="segment-row"><span class="seg-label"><span class="${modeClass}">●</span> ${modeLabel2} ${mins}${t('د', 'min')} ${timerLabel2} @ ${money(s.rate)}</span><span class="seg-value ${modeClass}">${moneyDec(amt)}</span></div>`;
-            }).join('')}
-            <div class="segment-divider"></div>
-            <div class="segment-row"><span class="seg-label">${t('إجمالي Single', 'Single Total')}</span><span class="seg-value seg-mode-single">${moneyDec(totals.singleTotal)}</span></div>
-            <div class="segment-row"><span class="seg-label">${t('إجمالي Multi', 'Multi Total')}</span><span class="seg-value seg-mode-multi">${moneyDec(totals.multiTotal)}</span></div>
-            <div class="segment-row"><span class="seg-label">${t('الطلبات', 'Orders')}</span><span class="seg-value">${moneyDec(totals.ordersTotal)}</span></div>
-            <div class="segment-row segment-total"><span class="seg-label">${t('الإجمالي الكلي', 'Grand Total')}</span><span class="seg-value" style="color:var(--amber);">${moneyDec(totals.grandTotal)}</span></div>
-        </div>
-        ` : ''}
-        
-        <div class="section-title">${t('إضافة طلب', 'Add Order')}</div>
-        <div id="menuQuickAdd" style="margin-bottom:12px;"></div>
-        
-        <div class="section-title">${t('الطلبات', 'Orders')}</div>
-        <div class="panel" id="stationOrdersList"></div>
-        
-        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;">
-            <button class="btn btn-amber btn-block" onclick="handleSwitchMode('${session.id}','${switchMode}','${st.id}')" id="switchModeBtn">
-                <i class="fa-solid fa-arrows-rotate"></i> ${switchLabel} (${money(switchRate)} ${t('ج/ساعة', 'EGP/hr')})
-            </button>
-            
-            <button class="btn btn-prepay btn-block" onclick="openPrepaymentSheet('${stationId}')">
-                <i class="fa-solid fa-money-bill-wave"></i> ${t('إضافة دفعة مقدمة', 'Add Prepayment')}
-            </button>
-            <div style="display:flex;gap:8px;">
-                <button class="btn btn-transfer" style="flex:1;" onclick="openTransferSheet('${stationId}')">
-                    <i class="fa-solid fa-exchange"></i> ${t('نقل الجلسة', 'Transfer Session')}
-                </button>
-                <button class="btn btn-cancel" style="flex:1;" onclick="confirmCancelSession('${stationId}')">
-                    <i class="fa-solid fa-xmark"></i> ${t('إلغاء الجلسة', 'Cancel Session')}
-                </button>
-            </div>
-            <button class="btn btn-ghost" onclick="closeSheet('stationOverlay')">${t('رجوع', 'Back')}</button>
-            <button class="btn btn-teal btn-block" onclick="showEndSessionPayment('${stationId}')"><i class="fa-solid fa-stop"></i> ${t('إنهاء الجلسة', 'End Session')}</button>
-        </div>
-        <div class="error-text" id="stationSheetError"></div>
-    `;
-    
-    renderMenuQuickAdd();
-    renderStationOrdersSection();
-}
-
-// ============================================================
-// SWITCH MODE - UPDATED (يدعم التنازلي مع مراعاة الوقت)
-// ============================================================
-async function handleSwitchMode(sessionId, newMode, stationId) {
-    if (pendingSwitch) return;
-    pendingSwitch = true;
-    const errEl = document.getElementById('stationSheetError');
-    errEl.textContent = '';
-    const btn = document.getElementById('switchModeBtn');
-    if (btn) btn.disabled = true;
-
-    try {
-        let activeSeg = await getActiveSegment(sessionId);
-
-        if (activeSeg && activeSeg.timer_type === 'countdown') {
-            const remaining = getRemainingSeconds(activeSeg);
-            if (remaining <= 0) {
-                showToast(t('لا يمكن التحويل لأن الوقت انتهى.', 'Cannot switch because time is up.'), 'error');
-                pendingSwitch = false;
-                if (btn) btn.disabled = false;
-                return;
-            }
-        }
-
-        if (!activeSeg) {
-            const session = sessions[stationId];
-            const st = stations.find(s => s.id === stationId);
-            const recoveryMode = (session && session.current_mode) || 'single';
-            const recoveryRate = (session && session.rate) || (recoveryMode === 'single' ? (st?.single_rate || 20) : (st?.multi_rate || 30));
-            const recoveryTimerType = (session && session.timer_type) || 'countup';
-            try {
-                activeSeg = await createSegment(sessionId, recoveryMode, new Date().toISOString(), recoveryRate, recoveryTimerType, 0);
-                showToast(t('تم تصحيح حالة الجلسة، جرب التحويل تاني لو محتاج', 'Session state fixed, try switching again if needed'), 'success');
-                await refreshStationSheetContent(stationId);
-            } catch (e) {
-                showToast(t('مقدرش أصلح حالة الجلسة، جرب تاني', "Couldn't fix session state, try again"), 'error');
-            }
-            pendingSwitch = false;
-            if (btn) btn.disabled = false;
-            return;
-        }
-
-        const now = new Date().toISOString();
-        const start = new Date(activeSeg.started_at);
-        let usedSeconds = (new Date(now) - start) / 1000;
-        let hours = usedSeconds / 3600;
-        let amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-
-        if (activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
-            usedSeconds = Math.min(usedSeconds, activeSeg.duration_seconds);
-            hours = usedSeconds / 3600;
-            amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
-        }
-
-        const st = stations.find(s => s.id === stationId);
-        const newRate = newMode === 'single' ? (st.single_rate || 20) : (st.multi_rate || 30);
-        const timerType = activeSeg.timer_type || 'countup';
-        const durationSeconds = timerType === 'countdown'
-            ? Math.max(0, Math.round((activeSeg.duration_seconds || 0) - usedSeconds))
-            : Math.round(activeSeg.duration_seconds || 0);
-
-        await closeSegment(activeSeg.id, now, amount);
-        await createSegment(sessionId, newMode, now, newRate, timerType, durationSeconds);
-
-        await supabaseClient.from('sessions')
-            .update({ current_mode: newMode, rate: newRate })
-            .eq('id', sessionId);
-
-        if (sessions[stationId]) {
-            sessions[stationId].current_mode = newMode;
-            sessions[stationId].rate = newRate;
-        }
-
-        showToast(t('تم التحويل إلى ' + (newMode === 'single' ? 'Single' : 'Multi'), 'Switched to ' + (newMode === 'single' ? 'Single' : 'Multi')), 'success');
-        
-        await refreshStationSheetContent(stationId);
-        
-    } catch (e) {
-        console.error('Error switching mode:', e);
-        errEl.textContent = t('فشل التحويل، حاول تاني.', 'Switch failed, try again.');
-        showToast(t('فشل التحويل: ' + e.message, 'Switch failed: ' + e.message), 'error');
-    } finally {
-        pendingSwitch = false;
-        if (btn) btn.disabled = false;
-    }
-}
+        console.warn('auto-resume failed', e);
+        localStorage.removeItem('platepro_business_code');
+    }
+}
+
+console.log('🍽️ Plate Pro — Full System with Realtime Sync & Advanced Shift History!');
+console.log('✅ Real-time synchronization between devices');
+console.log('✅ Advanced shift history with daily/weekly/monthly views');
+console.log('✅ Detailed shift view with table and time analysis');
+console.log('✅ One shift for the entire restaurant');
+console.log('✅ Granular permissions per role');
+console.log('✅ Notifications only for waiters when order is ready');
+console.log('✅ Kitchen orders for chef');
+console.log('✅ Ring notifications for new & ready orders');
