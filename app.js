@@ -1263,7 +1263,30 @@ function formatElapsed(start) {
 // ============================================================
 // DASHBOARD
 // ============================================================
+function updateStationTypeCounts() {
+    if (typeof stations === 'undefined' || !stations) return;
+
+    const billiardStations = stations.filter(st => st.station_type !== 'drinks');
+    const drinksStations = stations.filter(st => st.station_type === 'drinks');
+
+    const billiardOccupied = billiardStations.filter(st => sessions && sessions[st.id]).length;
+    const billiardAvailable = billiardStations.length - billiardOccupied;
+    const drinksOccupied = drinksStations.filter(st => sessions && sessions[st.id]).length;
+    const drinksAvailable = drinksStations.length - drinksOccupied;
+
+    const elBillAvail = document.getElementById('dashBilliardAvailable');
+    const elBillOcc = document.getElementById('dashBilliardOccupied');
+    const elDrinkAvail = document.getElementById('dashDrinksAvailable');
+    const elDrinkOcc = document.getElementById('dashDrinksOccupied');
+
+    if (elBillAvail) elBillAvail.textContent = billiardAvailable;
+    if (elBillOcc) elBillOcc.textContent = billiardOccupied;
+    if (elDrinkAvail) elDrinkAvail.textContent = drinksAvailable;
+    if (elDrinkOcc) elDrinkOcc.textContent = drinksOccupied;
+}
+
 async function renderDashboard() {
+    updateStationTypeCounts();
     if (!currentShift) {
         try {
             const { data: created } = await supabaseClient.from('shifts').insert({ 
@@ -1358,6 +1381,7 @@ async function renderDashboard() {
 // STATIONS
 // ============================================================
 function renderStationsGrid() {
+    updateStationTypeCounts();
     const grid = document.getElementById('stationsGrid');
     grid.innerHTML = stations.map(st => {
         const s = sessions[st.id];
