@@ -47,7 +47,6 @@ function updateTexts() {
         el.textContent = currentLang === 'ar' ? el.dataset.ar : el.dataset.en;
     });
     
-    // تحديث أسماء الأشهر
     updateMonthNames();
     
     renderStationsGrid();
@@ -138,9 +137,10 @@ let transferSourceStationId = null;
 let countdownTimers = {};
 let countdownAlerts = {};
 let categoryToggleState = {};
+let pdfImportParsedData = null;
 
 // ============================================================
-// TOGGLE PIN SECTION (قابل للطي)
+// TOGGLE PIN SECTION
 // ============================================================
 let settingsPinExpanded = false;
 
@@ -228,10 +228,9 @@ function escapeHtml(str) {
 }
 
 // ============================================================
-// CATEGORIES MANAGEMENT - نظام التصنيفات الديناميكي
+// CATEGORIES MANAGEMENT
 // ============================================================
 
-// تحميل التصنيفات من قاعدة البيانات
 async function loadCategories() {
     assertBusinessContext();
     try {
@@ -247,7 +246,6 @@ async function loadCategories() {
         return categories;
     } catch (e) {
         console.warn('Error loading categories:', e);
-        // محاولة تحميل من localStorage كاحتياطي
         const localData = localStorage.getItem('psr_categories_' + business.id);
         if (localData) {
             categories = JSON.parse(localData);
@@ -258,14 +256,12 @@ async function loadCategories() {
     }
 }
 
-// حفظ التصنيفات في localStorage (احتياطي)
 function cacheCategories() {
     if (business && business.id && categories.length > 0) {
         localStorage.setItem('psr_categories_' + business.id, JSON.stringify(categories));
     }
 }
 
-// إضافة تصنيف جديد
 async function addCategory(name, icon = 'fa-tag', color = 'badge-teal') {
     assertBusinessContext();
     const trimmedName = name.trim();
@@ -274,7 +270,6 @@ async function addCategory(name, icon = 'fa-tag', color = 'badge-teal') {
         return null;
     }
     
-    // التحقق من عدم التكرار
     if (categories.some(c => c.name.toLowerCase() === trimmedName.toLowerCase())) {
         showToast(t('التصنيف موجود بالفعل', 'Category already exists'), 'warning');
         return null;
@@ -309,12 +304,10 @@ async function addCategory(name, icon = 'fa-tag', color = 'badge-teal') {
     }
 }
 
-// حذف تصنيف
 async function deleteCategory(categoryId) {
     const category = categories.find(c => c.id === categoryId);
     if (!category) return;
     
-    // التحقق من وجود أصناف مرتبطة بهذا التصنيف
     const linkedItems = menuItems.filter(item => item.category_id === categoryId);
     if (linkedItems.length > 0) {
         const confirmMsg = t(
@@ -352,37 +345,31 @@ async function deleteCategory(categoryId) {
     }
 }
 
-// الحصول على اسم التصنيف من الـ ID
 function getCategoryName(categoryId) {
     if (!categoryId) return t('بدون تصنيف', 'Uncategorized');
     const cat = categories.find(c => c.id === categoryId);
     return cat ? cat.name : t('بدون تصنيف', 'Uncategorized');
 }
 
-// الحصول على أيقونة التصنيف
 function getCategoryIcon(categoryId) {
     if (!categoryId) return 'fa-tag';
     const cat = categories.find(c => c.id === categoryId);
     return cat ? cat.icon : 'fa-tag';
 }
 
-// الحصول على لون التصنيف
 function getCategoryColor(categoryId) {
     if (!categoryId) return 'badge-purple';
     const cat = categories.find(c => c.id === categoryId);
     return cat ? cat.color : 'badge-purple';
 }
 
-// دالة مساعدة لتطبيع اسم التصنيف من النص
 function normalizeCategoryName(text) {
     const v = String(text || '').trim().toLowerCase();
     if (!v) return null;
     
-    // محاولة العثور على تطابق تام في التصنيفات الموجودة
     const exactMatch = categories.find(c => c.name.toLowerCase() === v);
     if (exactMatch) return exactMatch.name;
     
-    // محاولة التطابق الجزئي مع الكلمات المفتاحية
     const coldKeywords = ['مشروبات باردة', 'عصير', 'عصائر', 'مياه غازية', 'كولا', 'باردة', 'cold', 'juice', 'soda', 'soft drink', 'مشروب بارد'];
     const hotKeywords = ['مشروبات ساخنة', 'قهوة', 'شاي', 'نسكافيه', 'كابتشينو', 'اسبريسو', 'ساخنة', 'hot', 'coffee', 'tea', 'cappuccino', 'espresso', 'مشروب ساخن'];
     const foodKeywords = ['أكل', 'اكل', 'طعام', 'ساندوتش', 'ساندويتش', 'برجر', 'بيتزا', 'وجبات', 'مقبلات', 'food', 'burger', 'pizza', 'sandwich', 'meal', 'snack', 'وجبة'];
@@ -397,16 +384,13 @@ function normalizeCategoryName(text) {
     return text.trim();
 }
 
-// إنشاء تصنيف تلقائياً من النص (يستخدم في استيراد PDF)
 async function getOrCreateCategoryFromText(text) {
     const normalizedName = normalizeCategoryName(text);
     if (!normalizedName) return null;
     
-    // البحث عن تصنيف موجود
     let existing = categories.find(c => c.name.toLowerCase() === normalizedName.toLowerCase());
     if (existing) return existing;
     
-    // تحديد الأيقونة واللون المناسبين
     let icon = 'fa-tag';
     let color = 'badge-purple';
     
@@ -427,7 +411,6 @@ async function getOrCreateCategoryFromText(text) {
     return newCategory;
 }
 
-// عرض التصنيفات في الإعدادات
 function renderSettingsCategories() {
     const container = document.getElementById('settingsCategoriesContainer');
     if (!container) return;
@@ -460,14 +443,12 @@ function renderSettingsCategories() {
     `).join('');
 }
 
-// فتح شيت إضافة تصنيف
 function openCategorySheet() {
     document.getElementById('categoryNameInput').value = '';
     document.getElementById('categoryError').textContent = '';
     openSheet('categoryOverlay');
 }
 
-// إضافة تصنيف من الشيت
 async function submitCategory() {
     const name = document.getElementById('categoryNameInput').value.trim();
     const icon = document.getElementById('categoryIconSelect').value;
@@ -483,18 +464,75 @@ async function submitCategory() {
     const result = await addCategory(name, icon, color);
     if (result) {
         closeSheet('categoryOverlay');
-        const categorySelect = document.getElementById('menuItemCategory');
-        if (categorySelect) {
-            const option = document.createElement('option');
-            option.value = result.id;
-            option.textContent = result.name;
-            categorySelect.appendChild(option);
-            categorySelect.value = result.id;
-        }
+        populateCategoryDropdown('menuItemCategory', result.id);
         renderSettings();
         renderSettingsCategories();
         renderMenuQuickAdd();
+        showToast(t('✅ تم إضافة التصنيف', '✅ Category added'), 'success');
     }
+}
+
+// ============================================================
+// CATEGORY DROPDOWN FUNCTIONS
+// ============================================================
+
+function populateCategoryDropdown(selectElementId = 'menuItemCategory', selectedValue = null) {
+    const select = document.getElementById(selectElementId);
+    if (!select) {
+        console.warn('Category select element not found:', selectElementId);
+        return;
+    }
+    
+    const currentValue = selectedValue || select.value;
+    
+    select.innerHTML = '';
+    
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = t('-- اختر تصنيفاً --', '-- Select Category --');
+    select.appendChild(defaultOption);
+    
+    if (!categories || categories.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = t('⚠️ لا توجد تصنيفات — أضف تصنيفاً', '⚠️ No categories — add one');
+        option.disabled = true;
+        select.appendChild(option);
+        return;
+    }
+    
+    categories.forEach(cat => {
+        const option = document.createElement('option');
+        option.value = cat.id;
+        option.textContent = cat.icon ? cat.icon + ' ' + cat.name : cat.name;
+        select.appendChild(option);
+    });
+    
+    if (currentValue && categories.some(c => c.id === currentValue)) {
+        select.value = currentValue;
+    } else if (categories.length > 0) {
+        select.value = categories[0].id;
+    }
+}
+
+function openCategorySheetFromMenuItem() {
+    document.getElementById('categoryNameInput').value = '';
+    document.getElementById('categoryError').textContent = '';
+    openSheet('categoryOverlay');
+    
+    const checkInterval = setInterval(() => {
+        const overlay = document.getElementById('categoryOverlay');
+        if (!overlay || !overlay.classList.contains('show')) {
+            clearInterval(checkInterval);
+            if (categories.length > 0) {
+                populateCategoryDropdown('menuItemCategory');
+                const select = document.getElementById('menuItemCategory');
+                if (select && categories.length > 0) {
+                    select.value = categories[categories.length - 1].id;
+                }
+            }
+        }
+    }, 300);
 }
 
 // ============================================================
@@ -755,7 +793,7 @@ async function loadStations() {
 }
 
 // ============================================================
-// MENU ITEMS - with localStorage fallback
+// MENU ITEMS
 // ============================================================
 async function loadMenuItems() {
     try {
@@ -2784,6 +2822,7 @@ function renderMenuQuickAdd() {
         const catId = categoryIds[i];
         const items = grouped[catId];
         const categoryName = catId === 'uncategorized' ? t('بدون تصنيف', 'Uncategorized') : getCategoryName(catId);
+        const icon = catId === 'uncategorized' ? 'fa-tag' : getCategoryIcon(catId);
         const isOpen = (i === 0);
         if (categoryToggleState[catId] === undefined) {
             categoryToggleState[catId] = isOpen;
@@ -2792,7 +2831,7 @@ function renderMenuQuickAdd() {
         
         html += `<div class="menu-category-group">`;
         html += `<div class="menu-category-toggle" onclick="toggleCategory('${escapeHtml(catId)}')">`;
-        html += `<span class="cat-title"><i class="fa-solid ${getCategoryIcon(catId)}"></i> ${escapeHtml(categoryName)}</span>`;
+        html += `<span class="cat-title"><i class="fa-solid ${icon}"></i> ${escapeHtml(categoryName)} (${items.length})</span>`;
         html += `<i class="fa-solid fa-chevron-down cat-arrow ${open ? 'open' : ''}"></i>`;
         html += `</div>`;
         html += `<div class="menu-category-items ${open ? 'open' : ''}" data-category="${escapeHtml(catId)}">`;
@@ -4199,16 +4238,12 @@ function openMenuItemSheet() {
     document.getElementById('menuItemError').textContent = '';
     document.getElementById('menuItemSheetTitle').textContent = t('إضافة صنف للقائمة', 'Add Menu Item');
     
-    const categorySelect = document.getElementById('menuItemCategory');
-    if (categorySelect) {
-        categorySelect.innerHTML = categories.map(cat => `
-            <option value="${cat.id}">
-                <i class="fa-solid ${cat.icon || 'fa-tag'}"></i> ${escapeHtml(cat.name)}
-            </option>
-        `).join('');
-        if (categories.length > 0) {
-            categorySelect.value = categories[0].id;
-        }
+    if (categories.length === 0) {
+        loadCategories().then(() => {
+            populateCategoryDropdown('menuItemCategory');
+        });
+    } else {
+        populateCategoryDropdown('menuItemCategory');
     }
     
     openSheet('menuItemOverlay');
@@ -4217,6 +4252,7 @@ function openMenuItemSheet() {
 function editMenuItem(itemId) {
     const item = menuItems.find(m => m.id === itemId);
     if (!item) return;
+    
     document.getElementById('menuItemId').value = item.id;
     document.getElementById('menuItemName').value = item.name;
     document.getElementById('menuItemPrice').value = item.price;
@@ -4224,16 +4260,12 @@ function editMenuItem(itemId) {
     document.getElementById('menuItemError').textContent = '';
     document.getElementById('menuItemSheetTitle').textContent = t('تعديل صنف', 'Edit Item');
     
-    const categorySelect = document.getElementById('menuItemCategory');
-    if (categorySelect) {
-        categorySelect.innerHTML = categories.map(cat => `
-            <option value="${cat.id}" ${cat.id === item.category_id ? 'selected' : ''}>
-                ${escapeHtml(cat.name)}
-            </option>
-        `).join('');
-        if (item.category_id) {
-            categorySelect.value = item.category_id;
-        }
+    if (categories.length === 0) {
+        loadCategories().then(() => {
+            populateCategoryDropdown('menuItemCategory', item.category_id);
+        });
+    } else {
+        populateCategoryDropdown('menuItemCategory', item.category_id);
     }
     
     openSheet('menuItemOverlay');
@@ -4375,8 +4407,6 @@ async function deleteEmployee(employeeId) {
 // ============================================================
 // PDF MENU IMPORT
 // ============================================================
-let pdfImportParsedData = null;
-
 function openPdfImportSheet() {
     document.getElementById('pdfImportFileInput').value = '';
     document.getElementById('pdfImportStatus').textContent = '';
@@ -4508,7 +4538,7 @@ async function analyzePdfMenu() {
         await loadCategories();
         
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'js/pdf.worker.min.js';
         }
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
