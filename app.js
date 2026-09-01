@@ -1266,21 +1266,28 @@ function formatElapsed(start) {
 function updateStationTypeCounts() {
     if (typeof stations === 'undefined' || !stations) return;
 
-    const billiardStations = stations.filter(st => st.station_type !== 'drinks');
+    const billiardStations = stations.filter(st => st.station_type === 'billiard' || !st.station_type);
+    const playstationStations = stations.filter(st => st.station_type === 'playstation');
     const drinksStations = stations.filter(st => st.station_type === 'drinks');
 
     const billiardOccupied = billiardStations.filter(st => sessions && sessions[st.id]).length;
     const billiardAvailable = billiardStations.length - billiardOccupied;
+    const playstationOccupied = playstationStations.filter(st => sessions && sessions[st.id]).length;
+    const playstationAvailable = playstationStations.length - playstationOccupied;
     const drinksOccupied = drinksStations.filter(st => sessions && sessions[st.id]).length;
     const drinksAvailable = drinksStations.length - drinksOccupied;
 
     const elBillAvail = document.getElementById('dashBilliardAvailable');
     const elBillOcc = document.getElementById('dashBilliardOccupied');
+    const elPsAvail = document.getElementById('dashPlaystationAvailable');
+    const elPsOcc = document.getElementById('dashPlaystationOccupied');
     const elDrinkAvail = document.getElementById('dashDrinksAvailable');
     const elDrinkOcc = document.getElementById('dashDrinksOccupied');
 
     if (elBillAvail) elBillAvail.textContent = billiardAvailable;
     if (elBillOcc) elBillOcc.textContent = billiardOccupied;
+    if (elPsAvail) elPsAvail.textContent = playstationAvailable;
+    if (elPsOcc) elPsOcc.textContent = playstationOccupied;
     if (elDrinkAvail) elDrinkAvail.textContent = drinksAvailable;
     if (elDrinkOcc) elDrinkOcc.textContent = drinksOccupied;
 }
@@ -1576,7 +1583,7 @@ function renderSettingsStations() {
         const displayName = st.name ? st.name : t('جهاز', 'Device') + ' ' + st.number;
         const subLabel = st.station_type === 'drinks'
             ? t('طلبات فقط (بدون وقت)', 'Orders only (no timer)')
-            : `${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}`;
+            : `${st.station_type === 'playstation' ? t('بلايستيشن', 'PlayStation') : t('بلياردو', 'Billiard')} — ${t('Single', 'Single')} ${money(st.single_rate || 20)} / ${t('Multi', 'Multi')} ${money(st.multi_rate || 30)} ${t('ج/ساعة', 'EGP/hr')}`;
         return `<div class="list-row">
             <div><div class="row-title">${escapeHtml(displayName)}</div><div class="row-sub">${t('رقم', 'No.')} ${st.number} — ${subLabel}</div></div>
             <div class="row-actions">
@@ -1588,10 +1595,11 @@ function renderSettingsStations() {
 }
 
 function selectStationType(type) {
+    const classForType = { billiard: 'selected-single', playstation: 'selected-purple', drinks: 'selected-multi' };
     document.querySelectorAll('#stationTypeSelector .mode-option').forEach(el => {
-        el.classList.remove('selected-single', 'selected-multi');
+        el.classList.remove('selected-single', 'selected-multi', 'selected-purple');
         if (el.dataset.stationType === type) {
-            el.classList.add(type === 'billiard' ? 'selected-single' : 'selected-multi');
+            el.classList.add(classForType[type] || 'selected-single');
         }
     });
     document.getElementById('stationManageType').value = type;
@@ -1623,7 +1631,7 @@ function editStation(stationId) {
     document.getElementById('stationDeleteBtn').style.display = 'flex';
     document.getElementById('stationManageError').textContent = '';
     document.getElementById('stationManagementTitle').textContent = t('تعديل جهاز', 'Edit Device');
-    selectStationType(st.station_type === 'drinks' ? 'drinks' : 'billiard');
+    selectStationType(st.station_type === 'drinks' ? 'drinks' : (st.station_type === 'playstation' ? 'playstation' : 'billiard'));
     openSheet('stationManagementOverlay');
 }
 
@@ -1631,7 +1639,8 @@ async function submitStationManagement() {
     const id = document.getElementById('stationManageId').value;
     const number = parseInt(document.getElementById('stationManageNumber').value);
     const name = document.getElementById('stationManageName').value.trim();
-    const stationType = document.getElementById('stationManageType').value === 'drinks' ? 'drinks' : 'billiard';
+    const rawType = document.getElementById('stationManageType').value;
+    const stationType = rawType === 'drinks' ? 'drinks' : (rawType === 'playstation' ? 'playstation' : 'billiard');
     const isDrinks = stationType === 'drinks';
     const singleRate = isDrinks ? 0 : parseFloat(document.getElementById('stationManageSingleRate').value);
     const multiRate = isDrinks ? 0 : parseFloat(document.getElementById('stationManageMultiRate').value);
