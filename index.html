@@ -243,6 +243,11 @@
             <div class="stat-card"><div class="stat-label" data-ar="طاولات بلياردو فاضية" data-en="Billiard Available">طاولات بلياردو فاضية</div><div class="stat-value mono" id="dashBilliardAvailable">0</div></div>
             <div class="stat-card"><div class="stat-label" data-ar="طاولات بلياردو مشغولة" data-en="Billiard Occupied">طاولات بلياردو مشغولة</div><div class="stat-value mono" id="dashBilliardOccupied">0</div></div>
         </div>
+        <div class="section-title" data-ar="حالة البلايستيشن" data-en="PlayStation Status">حالة البلايستيشن</div>
+        <div class="stat-grid">
+            <div class="stat-card"><div class="stat-label" data-ar="أجهزة بلايستيشن فاضية" data-en="PlayStation Available">أجهزة بلايستيشن فاضية</div><div class="stat-value mono" id="dashPlaystationAvailable">0</div></div>
+            <div class="stat-card"><div class="stat-label" data-ar="أجهزة بلايستيشن مشغولة" data-en="PlayStation Occupied">أجهزة بلايستيشن مشغولة</div><div class="stat-value mono" id="dashPlaystationOccupied">0</div></div>
+        </div>
         <div class="section-title" data-ar="حالة ترابيزات المشروبات" data-en="Drinks Tables Status">حالة ترابيزات المشروبات</div>
         <div class="stat-grid">
             <div class="stat-card"><div class="stat-label" data-ar="ترابيزات مشروبات فاضية" data-en="Drinks Tables Available">ترابيزات مشروبات فاضية</div><div class="stat-value mono" id="dashDrinksAvailable">0</div></div>
@@ -391,8 +396,13 @@
             <div class="mode-selector" id="stationTypeSelector">
                 <div class="mode-option selected-single" data-station-type="billiard" onclick="selectStationType('billiard')">
                     <span class="mode-icon">🎱</span>
-                    <div class="mode-name" data-ar="بالوقت" data-en="Timed">بالوقت</div>
-                    <div class="mode-rate" data-ar="بلياردو / بلايستيشن" data-en="Billiard / PlayStation">بلياردو / بلايستيشن</div>
+                    <div class="mode-name" data-ar="بلياردو" data-en="Billiard">بلياردو</div>
+                    <div class="mode-rate" data-ar="بالوقت" data-en="Timed">بالوقت</div>
+                </div>
+                <div class="mode-option" data-station-type="playstation" onclick="selectStationType('playstation')">
+                    <span class="mode-icon">🎮</span>
+                    <div class="mode-name" data-ar="بلايستيشن" data-en="PlayStation">بلايستيشن</div>
+                    <div class="mode-rate" data-ar="بالوقت" data-en="Timed">بالوقت</div>
                 </div>
                 <div class="mode-option" data-station-type="drinks" onclick="selectStationType('drinks')">
                     <span class="mode-icon">🍹</span>
