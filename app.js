@@ -53,6 +53,7 @@ function updateTexts() {
     renderStationsGrid();
     renderSettingsStations();
     renderSettingsPaymentMethods();
+    renderSettingsCategories();
     if (document.getElementById('view-shift').classList.contains('active')) renderShiftView();
     if (document.getElementById('view-settings').classList.contains('active')) renderSettings();
 }
@@ -113,6 +114,7 @@ let sessions = {};
 let menuItems = [];
 let employees = [];
 let paymentMethods = [];
+let categories = [];
 let currentShift = null;
 let currentUser = null;
 let realtimeChannel = null;
@@ -123,25 +125,22 @@ let currentOrderSessionId = null;
 let selectedPaymentMethod = null;
 let endSessionStationId = null;
 let endingSessionInProgress = false;
-let stationOrdersCache = {}; // session_id -> [{item_name, quantity}, ...] لملخص الطلبات في كارت الجهاز
-// ✅ حالة الخصم/المبلغ المدفوع لشاشة إنهاء الجلسة
+let stationOrdersCache = {};
 let currentEndSessionTotals = null;
 let endSessionDiscount = 0;
 let endSessionAmountPaid = null;
 let endSessionPrepaidTotal = 0;
 let sessionSegmentsCache = {};
 let activeSegmentCache = {};
-// ✅ كاش الدفعات المقدمة (قبل الجلسة/أثناءها)
 let sessionPrepaymentsCache = {};
 let pendingSwitch = false;
 let transferSourceStationId = null;
 let countdownTimers = {};
 let countdownAlerts = {};
-// تخزين حالة التوجل لكل تصنيف
 let categoryToggleState = {};
 
 // ============================================================
-// ✅ TOGGLE PIN SECTION (قابل للطي)
+// TOGGLE PIN SECTION (قابل للطي)
 // ============================================================
 let settingsPinExpanded = false;
 
@@ -189,7 +188,7 @@ function navigateTo(viewId) {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === viewId));
     if (viewId === 'view-dashboard') renderDashboard();
     if (viewId === 'view-shift') renderShiftView();
-    if (viewId === 'view-settings') { renderSettings(); renderSettingsStations(); renderSettingsPaymentMethods(); }
+    if (viewId === 'view-settings') { renderSettings(); renderSettingsStations(); renderSettingsPaymentMethods(); renderSettingsCategories(); }
     if (viewId === 'view-stations') refreshStationOrdersCache().then(updateStationOrdersSummaryDOM);
 }
 function openSheet(id) { document.getElementById(id).classList.add('show'); }
@@ -219,6 +218,283 @@ function applyPermissions() {
     if (navShift) navShift.style.display = (isOwner || perms.shift) ? 'flex' : 'none';
     if (navStations) navStations.style.display = (isOwner || perms.stations) ? 'flex' : 'none';
     if (fab) fab.style.display = (isOwner || perms.shift) ? 'flex' : 'none';
+}
+
+function escapeHtml(str) { 
+    if (!str) return '';
+    const d = document.createElement('div'); 
+    d.textContent = str; 
+    return d.innerHTML; 
+}
+
+// ============================================================
+// CATEGORIES MANAGEMENT - نظام التصنيفات الديناميكي
+// ============================================================
+
+// تحميل التصنيفات من قاعدة البيانات
+async function loadCategories() {
+    assertBusinessContext();
+    try {
+        const { data, error } = await supabaseClient
+            .from('categories')
+            .select('*')
+            .eq('business_id', business.id)
+            .order('name', { ascending: true });
+        
+        if (error) throw error;
+        categories = data || [];
+        cacheCategories();
+        return categories;
+    } catch (e) {
+        console.warn('Error loading categories:', e);
+        // محاولة تحميل من localStorage كاحتياطي
+        const localData = localStorage.getItem('psr_categories_' + business.id);
+        if (localData) {
+            categories = JSON.parse(localData);
+            return categories;
+        }
+        categories = [];
+        return [];
+    }
+}
+
+// حفظ التصنيفات في localStorage (احتياطي)
+function cacheCategories() {
+    if (business && business.id && categories.length > 0) {
+        localStorage.setItem('psr_categories_' + business.id, JSON.stringify(categories));
+    }
+}
+
+// إضافة تصنيف جديد
+async function addCategory(name, icon = 'fa-tag', color = 'badge-teal') {
+    assertBusinessContext();
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+        showToast(t('اسم التصنيف مطلوب', 'Category name is required'), 'error');
+        return null;
+    }
+    
+    // التحقق من عدم التكرار
+    if (categories.some(c => c.name.toLowerCase() === trimmedName.toLowerCase())) {
+        showToast(t('التصنيف موجود بالفعل', 'Category already exists'), 'warning');
+        return null;
+    }
+    
+    try {
+        const newCategory = {
+            business_id: business.id,
+            name: trimmedName,
+            icon: icon,
+            color: color
+        };
+        
+        const { data, error } = await supabaseClient
+            .from('categories')
+            .insert(newCategory)
+            .select()
+            .single();
+        
+        if (error) throw error;
+        
+        categories.push(data);
+        cacheCategories();
+        renderSettings();
+        renderSettingsCategories();
+        showToast(t(`✅ تم إضافة تصنيف "${trimmedName}"`, `✅ Category "${trimmedName}" added`), 'success');
+        return data;
+    } catch (e) {
+        console.error('Error adding category:', e);
+        showToast(t('فشل إضافة التصنيف', 'Failed to add category'), 'error');
+        return null;
+    }
+}
+
+// حذف تصنيف
+async function deleteCategory(categoryId) {
+    const category = categories.find(c => c.id === categoryId);
+    if (!category) return;
+    
+    // التحقق من وجود أصناف مرتبطة بهذا التصنيف
+    const linkedItems = menuItems.filter(item => item.category_id === categoryId);
+    if (linkedItems.length > 0) {
+        const confirmMsg = t(
+            `⚠️ هذا التصنيف يحتوي على ${linkedItems.length} صنف(أصناف).\n\nسيتم إزالة التصنيف من هذه الأصناف (لن يتم حذف الأصناف نفسها).\n\nهل أنت متأكد؟`,
+            `⚠️ This category has ${linkedItems.length} item(s).\n\nThe category will be removed from these items (items themselves won't be deleted).\n\nAre you sure?`
+        );
+        if (!confirm(confirmMsg)) return;
+    } else {
+        if (!confirm(t(`هل أنت متأكد من حذف تصنيف "${category.name}"؟`, `Are you sure you want to delete category "${category.name}"?`))) return;
+    }
+    
+    try {
+        const { error } = await supabaseClient
+            .from('categories')
+            .delete()
+            .eq('id', categoryId)
+            .eq('business_id', business.id);
+        
+        if (error) throw error;
+        
+        categories = categories.filter(c => c.id !== categoryId);
+        menuItems.forEach(item => {
+            if (item.category_id === categoryId) {
+                item.category_id = null;
+            }
+        });
+        cacheCategories();
+        renderSettings();
+        renderSettingsCategories();
+        renderMenuQuickAdd();
+        showToast(t(`✅ تم حذف تصنيف "${category.name}"`, `✅ Category "${category.name}" deleted`), 'success');
+    } catch (e) {
+        console.error('Error deleting category:', e);
+        showToast(t('فشل حذف التصنيف', 'Failed to delete category'), 'error');
+    }
+}
+
+// الحصول على اسم التصنيف من الـ ID
+function getCategoryName(categoryId) {
+    if (!categoryId) return t('بدون تصنيف', 'Uncategorized');
+    const cat = categories.find(c => c.id === categoryId);
+    return cat ? cat.name : t('بدون تصنيف', 'Uncategorized');
+}
+
+// الحصول على أيقونة التصنيف
+function getCategoryIcon(categoryId) {
+    if (!categoryId) return 'fa-tag';
+    const cat = categories.find(c => c.id === categoryId);
+    return cat ? cat.icon : 'fa-tag';
+}
+
+// الحصول على لون التصنيف
+function getCategoryColor(categoryId) {
+    if (!categoryId) return 'badge-purple';
+    const cat = categories.find(c => c.id === categoryId);
+    return cat ? cat.color : 'badge-purple';
+}
+
+// دالة مساعدة لتطبيع اسم التصنيف من النص
+function normalizeCategoryName(text) {
+    const v = String(text || '').trim().toLowerCase();
+    if (!v) return null;
+    
+    // محاولة العثور على تطابق تام في التصنيفات الموجودة
+    const exactMatch = categories.find(c => c.name.toLowerCase() === v);
+    if (exactMatch) return exactMatch.name;
+    
+    // محاولة التطابق الجزئي مع الكلمات المفتاحية
+    const coldKeywords = ['مشروبات باردة', 'عصير', 'عصائر', 'مياه غازية', 'كولا', 'باردة', 'cold', 'juice', 'soda', 'soft drink', 'مشروب بارد'];
+    const hotKeywords = ['مشروبات ساخنة', 'قهوة', 'شاي', 'نسكافيه', 'كابتشينو', 'اسبريسو', 'ساخنة', 'hot', 'coffee', 'tea', 'cappuccino', 'espresso', 'مشروب ساخن'];
+    const foodKeywords = ['أكل', 'اكل', 'طعام', 'ساندوتش', 'ساندويتش', 'برجر', 'بيتزا', 'وجبات', 'مقبلات', 'food', 'burger', 'pizza', 'sandwich', 'meal', 'snack', 'وجبة'];
+    
+    for (const cat of categories) {
+        const catLower = cat.name.toLowerCase();
+        if (coldKeywords.some(k => catLower.includes(k) || v.includes(k))) return cat.name;
+        if (hotKeywords.some(k => catLower.includes(k) || v.includes(k))) return cat.name;
+        if (foodKeywords.some(k => catLower.includes(k) || v.includes(k))) return cat.name;
+    }
+    
+    return text.trim();
+}
+
+// إنشاء تصنيف تلقائياً من النص (يستخدم في استيراد PDF)
+async function getOrCreateCategoryFromText(text) {
+    const normalizedName = normalizeCategoryName(text);
+    if (!normalizedName) return null;
+    
+    // البحث عن تصنيف موجود
+    let existing = categories.find(c => c.name.toLowerCase() === normalizedName.toLowerCase());
+    if (existing) return existing;
+    
+    // تحديد الأيقونة واللون المناسبين
+    let icon = 'fa-tag';
+    let color = 'badge-purple';
+    
+    const lowerName = normalizedName.toLowerCase();
+    if (lowerName.includes('بارد') || lowerName.includes('cold') || lowerName.includes('عصير') || lowerName.includes('مشروب بارد')) {
+        icon = 'fa-snowflake';
+        color = 'badge-teal';
+    } else if (lowerName.includes('ساخن') || lowerName.includes('hot') || lowerName.includes('قهوة') || lowerName.includes('شاي') || lowerName.includes('مشروب ساخن')) {
+        icon = 'fa-mug-hot';
+        color = 'badge-amber';
+    } else if (lowerName.includes('أكل') || lowerName.includes('اكل') || lowerName.includes('طعام') || lowerName.includes('food') || lowerName.includes('وجبة') || lowerName.includes('ساندويتش')) {
+        icon = 'fa-utensils';
+        color = 'badge-green';
+    }
+    
+    showToast(t(`🔄 جاري إنشاء تصنيف جديد: "${normalizedName}"`, `🔄 Creating new category: "${normalizedName}"`), 'warning');
+    const newCategory = await addCategory(normalizedName, icon, color);
+    return newCategory;
+}
+
+// عرض التصنيفات في الإعدادات
+function renderSettingsCategories() {
+    const container = document.getElementById('settingsCategoriesContainer');
+    if (!container) return;
+    
+    if (!categories || categories.length === 0) {
+        container.innerHTML = `
+            <div class="empty">
+                <i class="fa-solid fa-tags"></i>
+                ${t('لا توجد تصنيفات — أضف تصنيفاً جديداً', 'No categories — add a new category')}
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = categories.map(cat => `
+        <div class="list-row">
+            <div>
+                <div class="row-title">
+                    <i class="fa-solid ${cat.icon || 'fa-tag'}" style="margin-left:8px;"></i>
+                    ${escapeHtml(cat.name)}
+                </div>
+                <div class="row-sub">${menuItems.filter(item => item.category_id === cat.id).length} ${t('أصناف', 'items')}</div>
+            </div>
+            <div class="row-actions">
+                <button class="btn btn-danger-sm" onclick="deleteCategory('${cat.id}')" title="${t('حذف التصنيف', 'Delete category')}">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+// فتح شيت إضافة تصنيف
+function openCategorySheet() {
+    document.getElementById('categoryNameInput').value = '';
+    document.getElementById('categoryError').textContent = '';
+    openSheet('categoryOverlay');
+}
+
+// إضافة تصنيف من الشيت
+async function submitCategory() {
+    const name = document.getElementById('categoryNameInput').value.trim();
+    const icon = document.getElementById('categoryIconSelect').value;
+    const color = document.getElementById('categoryColorSelect').value;
+    const errEl = document.getElementById('categoryError');
+    errEl.textContent = '';
+    
+    if (!name) {
+        errEl.textContent = t('اكتب اسم التصنيف.', 'Enter category name.');
+        return;
+    }
+    
+    const result = await addCategory(name, icon, color);
+    if (result) {
+        closeSheet('categoryOverlay');
+        const categorySelect = document.getElementById('menuItemCategory');
+        if (categorySelect) {
+            const option = document.createElement('option');
+            option.value = result.id;
+            option.textContent = result.name;
+            categorySelect.appendChild(option);
+            categorySelect.value = result.id;
+        }
+        renderSettings();
+        renderSettingsCategories();
+        renderMenuQuickAdd();
+    }
 }
 
 // ============================================================
@@ -382,29 +658,19 @@ async function tryAutoResume() {
     } catch (e) { console.warn('auto-resume failed', e); }
 }
 
-// ============================================================
-// AUTO-ACTIVATE FROM URL (?biz=CODE&code=ACTIVATION)
-// Used by the "start free trial" button on the marketing/dashboard
-// site, which creates a business + trial activation code and sends
-// the device straight here. Only runs for a device with no existing
-// saved session, so it never hijacks an already-installed device.
-// ============================================================
 async function tryAutoActivateFromURL() {
-    if (localStorage.getItem('psr_business_code')) return; // existing device — don't interfere
+    if (localStorage.getItem('psr_business_code')) return;
     const params = new URLSearchParams(window.location.search);
     const bizCode = params.get('biz');
     const actCodeParam = params.get('code');
     if (!bizCode) return;
 
-    // Clean the URL so a refresh/share doesn't re-trigger this.
     window.history.replaceState({}, document.title, window.location.pathname);
 
     const setupInput = document.getElementById('setupBusinessCode');
     if (setupInput) setupInput.value = bizCode;
     await handleSetupContinue();
 
-    // If handleSetupContinue routed us to the activation screen (new device)
-    // and we have an activation code, fill it in and submit automatically.
     const activationScreen = document.getElementById('activationScreen');
     if (actCodeParam && activationScreen && activationScreen.classList.contains('active')) {
         const actInput = document.getElementById('activationCodeInput');
@@ -431,33 +697,28 @@ async function enterMainApp() {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === 'view-dashboard'));
     
     populateYearSelect();
-    // مبنعملهاش await عشان ملف الشبكة بتاعها (حتى لو بطيء) ميأخرش فتح
-    // التطبيق؛ بمجرد ما تخلص في الخلفية، بتحدّث الأرقام المعروضة تلقائيًا
     syncServerClock().then(() => { renderStationsGrid(); });
     await loadAllData();
     subscribeRealtime();
     startTicker();
     updateTexts();
     await recoverActiveSession();
-    // إعادة مزامنة الساعة كل 5 دقايق عشان نلحق أي انزياح لساعة الجهاز أثناء الاستخدام
     setInterval(syncServerClock, 5 * 60 * 1000);
 }
 
 async function loadAllData() {
-    // Load each area independently. A problem in one table (for example,
-    // duplicate open shifts in an older database) must not prevent the
-    // stations and the rest of the app from rendering.
     const results = await Promise.allSettled([
         loadStations(),
         loadMenuItems(),
         loadEmployees(),
         loadPaymentMethods(),
-        loadOrOpenShift()
+        loadOrOpenShift(),
+        loadCategories()
     ]);
 
     results.forEach((result, index) => {
         if (result.status === 'rejected') {
-            const names = ['stations', 'menu_items', 'employees', 'payment_methods', 'shift'];
+            const names = ['stations', 'menu_items', 'employees', 'payment_methods', 'shift', 'categories'];
             console.error(`Failed to load ${names[index]}:`, result.reason);
         }
     });
@@ -466,6 +727,7 @@ async function loadAllData() {
     renderStationsGrid();
     renderSettingsStations();
     renderSettingsPaymentMethods();
+    renderSettingsCategories();
 }
 
 async function loadStations() {
@@ -595,9 +857,6 @@ async function loadPaymentMethods() {
 async function loadOrOpenShift() {
     assertBusinessContext();
 
-    // Do not use maybeSingle() here. The current database contains multiple
-    // open shifts for this business (the console reports 19 rows), so
-    // maybeSingle() throws PGRST116 and used to stop the whole app from rendering.
     const { data: openShifts, error } = await supabaseClient
         .from('shifts')
         .select('*')
@@ -608,8 +867,6 @@ async function loadOrOpenShift() {
     if (error) throw error;
 
     if (openShifts && openShifts.length > 0) {
-        // Use the newest open shift for now. Do NOT automatically delete or
-        // close the other financial records; they need manual review.
         currentShift = openShifts[0];
 
         if (openShifts.length > 1) {
@@ -712,7 +969,6 @@ async function getActiveSegment(sessionId) {
 }
 
 function getActiveSegmentFast(sessionId) {
-    // ✅ لو الكاش فاضي أو null، نجيب من الداتابيز
     if (!activeSegmentCache[sessionId]) {
         return null;
     }
@@ -720,10 +976,7 @@ function getActiveSegmentFast(sessionId) {
 }
 
 // ============================================================
-// ✅ الدفعة المقدمة (Prepayment) — العميل يدفع قبل ما يقعد على
-// الجهاز، أو يزوّد الدفعة أثناء الجلسة. كل دفعة بتتسجل كصف مستقل
-// في session_prepayments (نفس فكرة session_segments/session_orders)
-// وبيتم جمعها وخصمها من الإجمالي في صفحة دفع نهاية الجلسة فقط.
+// PREPAYMENT FUNCTIONS
 // ============================================================
 async function addPrepayment(sessionId, amount, note) {
     assertBusinessContext();
@@ -739,10 +992,8 @@ async function addPrepayment(sessionId, amount, note) {
     }).select().single();
     if (error) throw error;
 
-    // ✅ إبطال الكاش عشان يتجاب تاني
     sessionPrepaymentsCache[sessionId] = null;
     
-    // ✅ تحديث واجهة الجلسة الحالية عشان تظهر الدفعة الجديدة
     if (activeStationId && sessions[activeStationId] && sessions[activeStationId].id === sessionId) {
         setTimeout(() => {
             refreshStationSheetContent(activeStationId);
@@ -753,7 +1004,6 @@ async function addPrepayment(sessionId, amount, note) {
 }
 
 async function getSessionPrepayments(sessionId) {
-    // ✅ لو في كاش، نجيب من الكاش
     if (sessionPrepaymentsCache[sessionId] !== undefined && sessionPrepaymentsCache[sessionId] !== null) {
         return sessionPrepaymentsCache[sessionId];
     }
@@ -764,7 +1014,6 @@ async function getSessionPrepayments(sessionId) {
             .eq('session_id', sessionId)
             .order('created_at', { ascending: true });
         if (error) {
-            // لو الجدول لسه مش متعمل في قاعدة البيانات، منسيبش الشاشة تقفل
             console.warn('session_prepayments unavailable:', error.message);
             sessionPrepaymentsCache[sessionId] = [];
             return [];
@@ -784,7 +1033,6 @@ async function getPrepaidTotal(sessionId) {
     return Math.round(total * 100) / 100;
 }
 
-// شاشة إضافة دفعة مقدمة أثناء الجلسة (زر "إضافة دفعة مقدمة")
 function openPrepaymentSheet(stationId) {
     const session = sessions[stationId];
     if (!session) {
@@ -836,17 +1084,7 @@ async function confirmAddPrepayment(sessionId, stationId) {
 }
 
 // ============================================================
-// ✅ CLOCK SYNC — تصحيح فرق ساعة الجهاز عن وقت السيرفر
-// المشكلة: كل جهاز (لابتوب/موبايل) بيحسب "الوقت المنقضي" بالمقارنة
-// بساعته المحلية هو. لو ساعة الموبايل متأخرة عن اللحظة اللي اتسجل
-// فيها started_at (اللي جت من جهاز تاني)، الفرق بيبقى سالب فيتقفل
-// على 00:00 ويفضل واقف. الحل: نجيب وقت حقيقي مرجعي مرة عند الدخول
-// ونحسب فرق ثابت (offset) ونستخدمه بدل ما نعتمد على ساعة الجهاز لوحدها.
-//
-// ملحوظة: بنجيب الوقت من محتوى الرد (JSON body) مش من الـ response
-// header، لإن المتصفح بيمنع قراءة هيدر Date في الطلبات cross-origin
-// إلا لو السيرفر يسمح بيه صراحة (Supabase مش بيسمح) — فالاعتماد على
-// الـ header كان بيرجع فاضي دايمًا والتصحيح مكانش بيشتغل فعليًا.
+// CLOCK SYNC
 // ============================================================
 let serverClockOffsetMs = 0;
 
@@ -861,9 +1099,6 @@ async function fetchWithTimeout(url, ms) {
 }
 
 async function syncServerClock() {
-    // ✅ المصدر الأول (الأوثق): وقت Supabase بتاعنا نفسه عن طريق RPC
-    // ده بيعتمد على نفس الاتصال اللي التطبيق أصلاً بينجح يكلمه في كل حتة
-    // تانية (مش على API خارجي ممكن يتحجب من الشبكة/الإضافات زي worldtimeapi)
     try {
         const { data, error } = await supabaseClient.rpc('get_server_time');
         if (!error && data) {
@@ -873,10 +1108,7 @@ async function syncServerClock() {
                 return;
             }
         }
-    } catch (e) {
-        // متاح لو الدالة get_server_time لسه متعملتش في قاعدة البيانات، بنكمل على المصادر الاحتياطية
-    }
-    // مصدر احتياطي أول
+    } catch (e) {}
     try {
         const res = await fetchWithTimeout('https://worldtimeapi.org/api/timezone/Etc/UTC', 4000);
         const data = await res.json();
@@ -884,10 +1116,7 @@ async function syncServerClock() {
             serverClockOffsetMs = (data.unixtime * 1000) - Date.now();
             return;
         }
-    } catch (e) {
-        // متوقع لو الدومين ده محجوب على الشبكة الحالية، بنكمل على المصدر التاني
-    }
-    // مصدر احتياطي تاني
+    } catch (e) {}
     try {
         const res = await fetchWithTimeout('https://timeapi.io/api/Time/current/zone?timeZone=UTC', 4000);
         const data = await res.json();
@@ -896,9 +1125,6 @@ async function syncServerClock() {
             if (!isNaN(serverTime)) serverClockOffsetMs = serverTime - Date.now();
         }
     } catch (e) {
-        // كل المصادر فشلت (غالباً الشبكة الحالية بتحجب الدومينات الخارجية دي) —
-        // بنسيب serverClockOffsetMs = 0 (يعتمد على ساعة الجهاز) من غير ما نضرب
-        // console.warn عشان ده سيناريو متوقع ومش خطأ حقيقي في التطبيق
         console.info('Clock sync: using local device time (external time sources unreachable).');
     }
 }
@@ -954,7 +1180,6 @@ async function calculateTotalAmounts(sessionId) {
         .eq('session_id', sessionId);
     const ordersTotal = (orders || []).reduce((sum, o) => sum + (Number(o.quantity) * Number(o.unit_price)), 0);
     
-    // ✅ جلب الدفعات المقدمة من الكاش أو الداتابيز
     let prepaidTotal = 0;
     try {
         prepaidTotal = await getPrepaidTotal(sessionId);
@@ -972,7 +1197,6 @@ async function calculateTotalAmounts(sessionId) {
         multiDuration: multiDuration,
         ordersTotal: ordersTotal,
         prepaidTotal: prepaidTotal,
-        // الباقي على العميل بعد خصم أي دفعة مقدمة (قبل خصم أي discount هيتحسب في صفحة الدفع)
         dueAfterPrepayment: Math.max(0, Math.round((grandTotal - prepaidTotal) * 100) / 100),
         grandTotal: grandTotal
     };
@@ -997,12 +1221,6 @@ async function getCurrentSegmentEstimate(sessionId) {
     return { amount, hours, segment: activeSeg };
 }
 
-// ============================================================
-// ⚡ نسخ سريعة (sync) بتحسب من بيانات اتجابت خلاص، من غير أي طلب شبكة إضافي
-// نفس الحسابات بالظبط بتاعة calculateTotalAmounts / getCurrentSegmentEstimate
-// بس من غير ما نضرب الداتابيز تاني على نفس المعلومة. مستخدمة في فتح/تحديث
-// شاشة الجهاز عشان تبقى سريعة الاستجابة حتى لو النت بطيء.
-// ============================================================
 function computeTotalsFromData(segments, orders, prepaidTotal) {
     let singleTotal = 0, multiTotal = 0, singleDuration = 0, multiDuration = 0;
 
@@ -1074,8 +1292,6 @@ function getCurrentSegmentEstimateFast(sessionId) {
     return { amount, hours, segment: activeSeg };
 }
 
-// قيمة الجزء الحالي المكتسبة فعليًا (على أساس الوقت المنقضي دايمًا، سواء تصاعدي أو تنازلي)
-// نفس المعادلة المستخدمة عند إغلاق الجزء فعليًا في calculateSegmentAmountFromTimes
 function getCurrentSegmentEarnedAmount(sessionId) {
     const activeSeg = getActiveSegmentFast(sessionId);
     if (!activeSeg) return 0;
@@ -1098,6 +1314,12 @@ function formatCountdown(seconds) {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     const s = Math.floor(seconds % 60);
+    return (h > 0 ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+function formatElapsed(start) {
+    const secs = Math.max(0, Math.floor((nowCorrected() - start.getTime()) / 1000));
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
     return (h > 0 ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
 
@@ -1173,7 +1395,7 @@ function handleSegmentChange(payload) {
 }
 
 // ============================================================
-// التيكر
+// TICKER
 // ============================================================
 function startTicker() {
     if (tickInterval) clearInterval(tickInterval);
@@ -1254,36 +1476,25 @@ function startTicker() {
     }, 1000);
 }
 
-function formatElapsed(start) {
-    const secs = Math.max(0, Math.floor((nowCorrected() - start.getTime()) / 1000));
-    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
-    return (h > 0 ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-}
-
 // ============================================================
 // DASHBOARD
 // ============================================================
 function updateStationTypeCounts() {
     if (typeof stations === 'undefined' || !stations) return;
 
-    // ✅ فصل الأجهزة حسب النوع بالضبط
     const billiardStations = stations.filter(st => st.station_type === 'billiard');
     const playstationStations = stations.filter(st => st.station_type === 'playstation');
     const drinksStations = stations.filter(st => st.station_type === 'drinks');
 
-    // ✅ إحصائيات البلياردو
     const billiardOccupied = billiardStations.filter(st => sessions && sessions[st.id]).length;
     const billiardAvailable = billiardStations.length - billiardOccupied;
     
-    // ✅ إحصائيات البلايستيشن
     const playstationOccupied = playstationStations.filter(st => sessions && sessions[st.id]).length;
     const playstationAvailable = playstationStations.length - playstationOccupied;
     
-    // ✅ إحصائيات المشروبات
     const drinksOccupied = drinksStations.filter(st => sessions && sessions[st.id]).length;
     const drinksAvailable = drinksStations.length - drinksOccupied;
 
-    // ✅ تحديث الـ DOM
     const elBillAvail = document.getElementById('dashBilliardAvailable');
     const elBillOcc = document.getElementById('dashBilliardOccupied');
     const elPsAvail = document.getElementById('dashPlaystationAvailable');
@@ -1447,7 +1658,7 @@ function renderStationsGrid() {
 }
 
 // ============================================================
-// STATION CARD — ORDERS SUMMARY (ملخص الطلبات جوه كارت الجهاز)
+// STATION CARD - ORDERS SUMMARY
 // ============================================================
 async function refreshStationOrdersCache() {
     const sessionIds = Object.values(sessions).map(s => s && s.id).filter(Boolean);
@@ -1479,8 +1690,6 @@ function getStationOrdersSummaryLines(sessionId) {
 }
 
 function buildOrdersSummaryHtml(lines) {
-    // ✅ اسم الصنف والكمية بيتكتبوا في عنصرين منفصلين (مش نص واحد مخلوط)
-    // عشان منتظمش في مشكلة اتجاه النص (bidi) اللي بتحصل لما نخلط عربي بأرقام/× في سطر واحد
     return lines.map(l => `<div class="station-orders-summary-item">
         <span class="station-orders-summary-name">${escapeHtml(l.name)}</span>
         <span class="station-orders-summary-qty" dir="ltr">×${escapeHtml(String(l.qty))}</span>
@@ -1855,14 +2064,6 @@ async function addOrderItem(sessionId, menuItemId) {
 
             if (error) throw error;
         } else {
-            // IMPORTANT:
-            // Do NOT use .select().single() here.
-            // If INSERT is allowed by RLS but SELECT is not,
-            // .insert().select().single() reports a false failure.
-            //
-            // We also send business_id when the column exists in the
-            // current V2 schema. If an older database does not have it,
-            // retry once without business_id.
             let insertPayload = {
                 business_id: business.id,
                 session_id: sessionId,
@@ -1891,7 +2092,6 @@ async function addOrderItem(sessionId, menuItemId) {
             if (error) throw error;
         }
 
-        // Reload from DB so the UI has the real row/id.
         const { data: refreshedOrders, error: reloadError } = await supabaseClient
             .from('session_orders')
             .select('*')
@@ -1899,8 +2099,6 @@ async function addOrderItem(sessionId, menuItemId) {
             .order('created_at');
 
         if (reloadError) {
-            // The insert succeeded, but the current RLS SELECT policy
-            // may prevent reading the row back. Do not claim INSERT failed.
             console.error('Order was inserted, but reload failed:', reloadError);
             showToast(
                 t('تم حفظ الطلب، لكن صلاحية قراءة الطلبات تحتاج مراجعة في Supabase.', 'Order was saved, but the SELECT permission for orders needs review in Supabase.'),
@@ -1910,7 +2108,6 @@ async function addOrderItem(sessionId, menuItemId) {
             activeSessionOrders = refreshedOrders || [];
         }
 
-        // ✅ حدّث ملخص الطلبات في كارت الجهاز فورًا من غير ما ننتظر الـ realtime
         stationOrdersCache[sessionId] = activeSessionOrders;
         updateStationOrdersSummaryDOM();
 
@@ -2081,13 +2278,8 @@ async function confirmTransfer() {
     
     try {
         const currentMode = sourceSession.current_mode || 'single';
-        // ✅ ناخد سعر الجهاز المستهدف الحالي دايماً (مش سعر الجلسة القديم)
         const currentRate = currentMode === 'multi' ? Number(targetStation.multi_rate) : Number(targetStation.single_rate);
 
-        // ✅ بدل ما نغيّر سعر الجزء الحالي بأثر رجعي (وده كان بيغير حساب الوقت اللي فات كله)،
-        // نقفل الجزء الحالي بسعره القديم لحد لحظة النقل، ونفتح جزء جديد بالسعر الجديد
-        // بنفس فكرة تبديل Single/Multi بالظبط. المؤقت الكلي (إجمالي الجلسة) بيفضل مكمّل
-        // عادي لأنه مبني على started_at بتاع الجلسة نفسها، مش بتاع الجزء.
         const now = new Date().toISOString();
         let activeSeg = await getActiveSegment(sourceSession.id);
 
@@ -2101,7 +2293,6 @@ async function confirmTransfer() {
             let durationSeconds = Math.round(activeSeg.duration_seconds || 0);
 
             if (timerType === 'countdown' && activeSeg.duration_seconds) {
-                // ✅ الوقت المتبقي يفضل زي ما هو، بيكمل العد من نفس النقطة بالسعر الجديد
                 usedSeconds = Math.min(usedSeconds, activeSeg.duration_seconds);
                 hours = usedSeconds / 3600;
                 amount = Math.round((hours * Number(activeSeg.rate)) * 100) / 100;
@@ -2363,17 +2554,12 @@ async function openStationSheet(stationId) {
 
     currentOrderSessionId = session.id;
 
-    // ✅ نفتح الشيت فورًا مع مؤشر تحميل خفيف — الاستجابة بقت لحظية بغض النظر عن سرعة النت،
-    // والبيانات الفعلية بتتحمل وتتحط بعدين لما توصل
     body.innerHTML = `<div style="text-align:center;padding:60px 0;color:var(--text-dim);"><i class="fa-solid fa-spinner fa-spin" style="font-size:24px;"></i></div>`;
     openSheet('stationOverlay');
 
-    // ✅ تحديث الكاش عشان نجيب أحدث بيانات
     sessionSegmentsCache[session.id] = null;
     activeSegmentCache[session.id] = null;
 
-    // ✅ الطلبات المستقلة عن بعض بتتجاب مرة واحدة على التوازي بدل التوالي
-    // (كانت بتاخد 4-5 رحلات شبكة متتالية، دلوقتي رحلتين بس على أقصى تقدير)
     const [segments, ordersResult, prepaidTotal] = await Promise.all([
         getSessionSegments(session.id),
         supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at'),
@@ -2391,11 +2577,9 @@ async function openStationSheet(stationId) {
         const durationSeconds = session._pausedRemaining;
         delete session._pausedRemaining;
         
-        // ✅ createSegment بيرجع الصف الجديد على طول، فمحتاجين مش نعمل استعلام تاني نجيبه بيه
         activeSeg = await createSegment(session.id, mode, new Date().toISOString(), rate, timerType, durationSeconds);
     }
 
-    // ✅ الحسابات دي بقت بتتم محليًا من البيانات اللي جبناها فوق، من غير أي طلب شبكة إضافي
     const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
     const currentEstimate = computeSegmentEstimate(activeSeg);
     
@@ -2511,7 +2695,7 @@ async function openStationSheet(stationId) {
 }
 
 // ============================================================
-// شيت مبسط لترابيزات المشروبات (بدون وقت — طلبات فقط)
+// DRINKS TABLE SHEET (ORDERS ONLY)
 // ============================================================
 function drinksTableSheetHtml(stationId, totals) {
     return `
@@ -2588,29 +2772,30 @@ function renderMenuQuickAdd() {
     
     const grouped = {};
     menuItems.forEach(item => {
-        const category = normalizeMenuCategory(item.category);
-        if (!grouped[category]) grouped[category] = [];
-        grouped[category].push(item);
+        const catId = item.category_id || 'uncategorized';
+        if (!grouped[catId]) grouped[catId] = [];
+        grouped[catId].push(item);
     });
     
     let html = '';
-    const categoryNames = Object.keys(grouped);
+    const categoryIds = Object.keys(grouped);
     
-    for (let i = 0; i < categoryNames.length; i++) {
-        const category = categoryNames[i];
-        const items = grouped[category];
+    for (let i = 0; i < categoryIds.length; i++) {
+        const catId = categoryIds[i];
+        const items = grouped[catId];
+        const categoryName = catId === 'uncategorized' ? t('بدون تصنيف', 'Uncategorized') : getCategoryName(catId);
         const isOpen = (i === 0);
-        if (categoryToggleState[category] === undefined) {
-            categoryToggleState[category] = isOpen;
+        if (categoryToggleState[catId] === undefined) {
+            categoryToggleState[catId] = isOpen;
         }
-        const open = categoryToggleState[category];
+        const open = categoryToggleState[catId];
         
         html += `<div class="menu-category-group">`;
-        html += `<div class="menu-category-toggle" onclick="toggleCategory('${escapeHtml(category)}')">`;
-        html += `<span class="cat-title">${escapeHtml(menuCategoryLabel(category))}</span>`;
+        html += `<div class="menu-category-toggle" onclick="toggleCategory('${escapeHtml(catId)}')">`;
+        html += `<span class="cat-title"><i class="fa-solid ${getCategoryIcon(catId)}"></i> ${escapeHtml(categoryName)}</span>`;
         html += `<i class="fa-solid fa-chevron-down cat-arrow ${open ? 'open' : ''}"></i>`;
         html += `</div>`;
-        html += `<div class="menu-category-items ${open ? 'open' : ''}" data-category="${escapeHtml(category)}">`;
+        html += `<div class="menu-category-items ${open ? 'open' : ''}" data-category="${escapeHtml(catId)}">`;
         items.forEach(item => {
             const sessionId =
                 currentOrderSessionId ||
@@ -2624,26 +2809,22 @@ function renderMenuQuickAdd() {
     container.innerHTML = html;
 }
 
-function toggleCategory(category) {
-    categoryToggleState[category] = !categoryToggleState[category];
-    const isOpen = categoryToggleState[category];
+function toggleCategory(categoryId) {
+    categoryToggleState[categoryId] = !categoryToggleState[categoryId];
+    const isOpen = categoryToggleState[categoryId];
     
     const container = document.getElementById('menuQuickAdd');
     if (!container) return;
-    const toggles = container.querySelectorAll('.menu-category-toggle');
-    toggles.forEach(toggle => {
-        const titleEl = toggle.querySelector('.cat-title');
-        if (titleEl && titleEl.textContent.trim() === menuCategoryLabel(category)) {
-            const arrow = toggle.querySelector('.cat-arrow');
-            if (arrow) {
-                arrow.classList.toggle('open', isOpen);
-            }
-        }
-    });
-    
-    const itemsContainer = container.querySelector(`.menu-category-items[data-category="${category}"]`);
+    const itemsContainer = container.querySelector(`.menu-category-items[data-category="${categoryId}"]`);
     if (itemsContainer) {
         itemsContainer.classList.toggle('open', isOpen);
+    }
+    const toggle = container.querySelector(`.menu-category-toggle`);
+    if (toggle) {
+        const arrow = toggle.querySelector('.cat-arrow');
+        if (arrow) {
+            arrow.classList.toggle('open', isOpen);
+        }
     }
 }
 
@@ -2681,10 +2862,6 @@ async function startSessionWithMode(stationId) {
     const st = stations.find(s => s.id === stationId);
     const rate = mode === 'single' ? (st.single_rate || 20) : (st.multi_rate || 30);
     
-    // ✅ نقرأ قيمة الدفعة المقدمة فوراً *قبل* أي عملية async
-    // لأن أول ما الجلسة تتسجل في الداتابيز، الـ realtime subscription بيرجع يعمل
-    // openStationSheet() تلقائياً ويمسح الفورم (فيه حقل الدفعة المقدمة) قبل ما
-    // نوصل نقراه، فكانت الدفعة بتتفقد بصمت من غير أي رسالة خطأ
     const prepayInputEl = document.getElementById('prepaymentInput');
     const prepayAmount = prepayInputEl ? (parseFloat(prepayInputEl.value) || 0) : 0;
     
@@ -2712,14 +2889,12 @@ async function startSessionWithMode(stationId) {
         
         await createSegment(session.id, mode, now, rate, timerType, durationSeconds);
         
-        // ✅ تسجيل الجلسة في الـ sessions قبل ما نضيف الدفعة المقدمة
         sessions[stationId] = session;
         renderStationsGrid();
         
         const timerLabel = timerType === 'countdown' ? t('تنازلي', 'Countdown') : t('تصاعدي', 'Count Up');
         const durationDisplay = timerType === 'countdown' ? ` (${hours} ${t('ساعة', 'hour')})` : '';
         
-        // ✅ لو العميل دفع مقدماً قبل ما يقعد، نسجل الدفعة دي على الجلسة الجديدة
         if (prepayAmount > 0) {
             try {
                 await addPrepayment(session.id, prepayAmount, t('قبل الجلسة', 'Before session'));
@@ -2733,7 +2908,6 @@ async function startSessionWithMode(stationId) {
         }
         
         renderDashboard();
-        // ✅ نحدّث محتوى نفس الشيت المفتوح فورًا من غير ما نقفله ونفتحه تاني بعد تأخير مصطنع
         await refreshStationSheetContent(stationId);
     } catch (e) {
         console.error('Error starting session:', e);
@@ -2741,9 +2915,6 @@ async function startSessionWithMode(stationId) {
     }
 }
 
-// ============================================================
-// بدء جلسة لترابيزة مشروبات (بدون وقت — طلبات فقط)
-// ============================================================
 async function startDrinksSession(stationId) {
     const prepayInputEl = document.getElementById('prepaymentInput');
     const prepayAmount = prepayInputEl ? (parseFloat(prepayInputEl.value) || 0) : 0;
@@ -2790,7 +2961,7 @@ async function startDrinksSession(stationId) {
 }
 
 // ============================================================
-// END SESSION WITH PAYMENT - مع خيار تمديد الوقت للجلسات التنازلية
+// END SESSION WITH PAYMENT
 // ============================================================
 function showEndSessionPayment(stationId) {
     endSessionStationId = stationId;
@@ -2802,26 +2973,19 @@ function showEndSessionPayment(stationId) {
     (async () => {
         const activeSeg = await getActiveSegment(session.id);
         
-        // ✅ لو الجلسة تنازلية والوقت خلص أو باقي أقل من 5 ثواني، نعرض خيار التمديد
         if (activeSeg && activeSeg.timer_type === 'countdown' && activeSeg.duration_seconds) {
             const remaining = getRemainingSeconds(activeSeg);
-            // لو الوقت خلص (0) أو أقل من 5 ثواني، نعرض خيار التمديد
             if (remaining <= 5) {
                 showExtendOrEndOptions(stationId, session, activeSeg);
                 return;
             }
         }
         
-        // ✅ باقي الكود القديم (لو الجلسة تصاعدية أو فيها وقت باقي)
         await proceedToEndSession(stationId, session);
     })();
 }
 
-// ============================================================
-// ✅ عرض خيارات التمديد أو إنهاء الجلسة (للجلسات التنازلية المنتهية)
-// ============================================================
 function showExtendOrEndOptions(stationId, session, activeSeg) {
-    // ✅ لو الدالة استُدعيت من زرار "رجوع" (بدون session/activeSeg)، نجيبهم من الكاش المحلي
     if (!session) session = sessions[stationId];
     if (!session) {
         showToast(t('الجلسة غير موجودة', 'Session not found'), 'error');
@@ -2839,7 +3003,6 @@ function showExtendOrEndOptions(stationId, session, activeSeg) {
     const body = document.getElementById('stationSheetBody');
     if (!body) return;
     
-    // حساب إجمالي الجلسة حتى الآن
     const start = new Date(activeSeg.started_at);
     const now = new Date(nowCorrected());
     const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
@@ -2874,9 +3037,6 @@ function showExtendOrEndOptions(stationId, session, activeSeg) {
     `;
 }
 
-// ============================================================
-// ✅ عرض شاشة إضافة وقت إضافي للجلسة التنازلية
-// ============================================================
 function showExtendTimeSheet(stationId) {
     const session = sessions[stationId];
     if (!session) return;
@@ -2890,7 +3050,6 @@ function showExtendTimeSheet(stationId) {
     const st = stations.find(s => s.id === stationId);
     const stationName = st ? (st.name || t('جهاز', 'Device') + ' ' + st.number) : t('جهاز', 'Device');
     
-    // حساب الوقت المستخدم حتى الآن
     const start = new Date(activeSeg.started_at);
     const now = new Date(nowCorrected());
     const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
@@ -2932,9 +3091,6 @@ function showExtendTimeSheet(stationId) {
     `;
 }
 
-// ============================================================
-// ✅ تأكيد تمديد الوقت للجلسة التنازلية
-// ============================================================
 async function confirmExtendTime(stationId) {
     const session = sessions[stationId];
     if (!session) {
@@ -2965,17 +3121,14 @@ async function confirmExtendTime(stationId) {
     }
     
     try {
-        // ✅ 1. نحسب الوقت المستخدم حتى الآن في الجزء الحالي
         const start = new Date(activeSeg.started_at);
         const now = new Date(nowCorrected());
         const elapsedSeconds = Math.min((now - start) / 1000, activeSeg.duration_seconds || 0);
         const hoursUsed = elapsedSeconds / 3600;
         const currentAmount = Math.round((hoursUsed * Number(activeSeg.rate)) * 100) / 100;
         
-        // ✅ 2. نقفل الجزء الحالي بالمبلغ المستحق
         await closeSegment(activeSeg.id, now.toISOString(), currentAmount);
         
-        // ✅ 3. نفتح جزء جديد بنفس الوضع والمعدل مع المدة الجديدة (الوقت المتبقي القديم + الوقت الإضافي)
         const remainingOld = Math.max(0, (activeSeg.duration_seconds || 0) - elapsedSeconds);
         const newDuration = remainingOld + extraSeconds;
         
@@ -2985,14 +3138,11 @@ async function confirmExtendTime(stationId) {
         
         await createSegment(session.id, mode, now.toISOString(), rate, timerType, newDuration);
         
-        // ✅ 4. تحديث الكاش
         activeSegmentCache[session.id] = null;
         sessionSegmentsCache[session.id] = null;
         
-        // ✅ 5. نعمل ريفريش للشاشة
         showToast(t(`✅ تم تمديد الوقت ${extraHours} ساعة`, `✅ Time extended by ${extraHours} hours`), 'success');
         
-        // ✅ 6. نحدث واجهة الجلسة
         await refreshStationSheetContent(stationId);
         
     } catch (e) {
@@ -3002,9 +3152,6 @@ async function confirmExtendTime(stationId) {
     }
 }
 
-// ============================================================
-// ✅ متابعة إنهاء الجلسة (الجزء القديم من showEndSessionPayment)
-// ============================================================
 async function proceedToEndSession(stationId, sessionParam) {
     const session = sessionParam || sessions[stationId];
     if (!session) { 
@@ -3153,9 +3300,6 @@ async function proceedToEndSession(stationId, sessionParam) {
     }
 }
 
-// ============================================================
-// SELECT PAYMENT METHOD
-// ============================================================
 function selectPaymentMethod(pmId) {
     selectedPaymentMethod = pmId;
     
@@ -3180,9 +3324,6 @@ function selectPaymentMethod(pmId) {
     }
 }
 
-// ============================================================
-// ✅ حساب الخصم والباقي أثناء الدفع
-// ============================================================
 function updatePaymentCalculation() {
     if (!currentEndSessionTotals) return;
     const grandTotal = currentEndSessionTotals.grandTotal;
@@ -3197,7 +3338,6 @@ function updatePaymentCalculation() {
     const finalTotalEl = document.getElementById('finalTotalDisplay');
     if (finalTotalEl) finalTotalEl.textContent = moneyDec(finalTotal);
 
-    // ✅ المتبقي على العميل فعلياً دلوقتي = الإجمالي بعد الخصم ناقص أي دفعة مقدمة
     const prepaid = Math.min(endSessionPrepaidTotal || 0, finalTotal);
     const remainingDue = Math.max(0, Math.round((finalTotal - prepaid) * 100) / 100);
     const remainingDueEl = document.getElementById('remainingDueDisplay');
@@ -3229,9 +3369,6 @@ function updatePaymentCalculation() {
     endSessionDiscount = discount;
 }
 
-// ============================================================
-// CANCEL END SESSION (Back button)
-// ============================================================
 function cancelEndSession() {
     const stationId = endSessionStationId || activeStationId;
     endingSessionInProgress = false;
@@ -3246,9 +3383,6 @@ function cancelEndSession() {
     }
 }
 
-// ============================================================
-// CONFIRM END SESSION WITH PAYMENT
-// ============================================================
 async function confirmEndSessionWithPayment() {
     if (!selectedPaymentMethod) {
         document.getElementById('endSessionError').textContent = t('اختر طريقة دفع أولاً.', 'Select a payment method first.');
@@ -3287,9 +3421,6 @@ async function confirmEndSessionWithPayment() {
             payment_method: selectedPaymentMethod
         };
 
-        // بنحاول نحفظ الخصم والمبلغ المدفوع كمان؛ لو الأعمدة دي لسه مش
-        // مضافة في قاعدة البيانات (discount / amount_paid)، بنرجع نحفظ
-        // بدونها عشان قفل الجلسة ميفشلش خالص.
         let { error } = await supabaseClient.from('sessions').update({
             ...basePayload,
             discount: discountAmount,
@@ -3310,7 +3441,6 @@ async function confirmEndSessionWithPayment() {
         
         const savedStationId = stationId;
         
-        // نثبّت قيمة الخصم النهائية (بعد أي clamp) عشان الإيصال يعرضها صح
         endSessionDiscount = discountAmount;
         
         delete sessions[stationId];
@@ -3533,8 +3663,6 @@ async function submitExpense() {
 // ============================================================
 async function getShiftTotals(shift) {
     try {
-        // ✅ الاستعلامين دول مستقلين عن بعض (مبنيين على شيفت واحد بس)، فبنجيبهم مع بعض
-        // على التوازي بدل ما نستنى واحد بعد التاني — ده بيقلل عدد رحلات الشبكة المتتالية
         const [{ data: sessRows }, { data: expRows }] = await Promise.all([
             supabaseClient
                 .from('sessions')
@@ -3586,9 +3714,6 @@ async function getShiftTotals(shift) {
 }
 
 async function renderShiftView() {
-    // ✅ نتأكد إن التابات وصف الفلتر الشهري متزامنين مع shiftFilter الحالي
-    // من أول ما الشاشة تتفتح، مش بس لما المستخدم يدوس على تاب — عشان كده
-    // كانت شاشة الفلترة بتظهر غلط أول ما السايت يتفتح
     document.querySelectorAll('.shift-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.filter === shiftFilter);
     });
@@ -3660,7 +3785,6 @@ async function renderShiftView() {
             .lt('closed_at', endDate.toISOString());
     }
     
-    // ✅ Limit to last 30 shifts for performance
     const { data: pastShifts } = await query.limit(30);
     
     const histEl = document.getElementById('shiftHistory');
@@ -3685,7 +3809,6 @@ async function renderShiftView() {
         return;
     }
 
-    // ✅ Load all shift totals in parallel for better performance
     const shiftPromises = pastShifts.map(shift => getShiftTotals(shift));
     const shiftTotalsResults = await Promise.all(shiftPromises);
     
@@ -3699,7 +3822,6 @@ async function renderShiftView() {
         const expLabel = t('مصروفات', 'Expenses');
         const netLabel = t('صافي الدخل', 'Net Income');
         
-        // ✅ Show who closed the shift with a small orange badge
         const closedBy = shift.closed_by || t('غير معروف', 'Unknown');
         const closedByBadge = `<span class="badge badge-amber" style="font-size:9px;padding:1px 8px;">👤 ${escapeHtml(closedBy)}</span>`;
         
@@ -3846,7 +3968,6 @@ async function confirmCloseShift() {
     const totals = await getShiftTotals(currentShift);
     const closedAt = new Date().toISOString();
     
-    // ✅ Get the name of who's closing the shift
     const closedByName = currentUser ? (currentUser.name || currentUser.type || t('غير معروف', 'Unknown')) : t('غير معروف', 'Unknown');
     
     const { data, error } = await supabaseClient
@@ -3889,12 +4010,6 @@ function renderSettings() {
         <div class="list-row"><div class="row-title">${t('حالة الجهاز', 'Device Status')}</div><div class="badge ${deviceRecord.revoked ? 'badge-red' : 'badge-teal'}">${deviceRecord.revoked ? t('موقوف', 'Suspended') : t('نشط', 'Active')}</div></div>
         <div class="list-row"><div class="row-title">${t('تاريخ الانتهاء', 'Expiry Date')}</div><div class="row-value mono">${expiry ? expiry.toLocaleDateString(currentLang === 'ar' ? 'ar-EG' : 'en-US') : '—'}</div></div>`;
 
-    // ============================================================
-    // ✅ TOGGLE PIN SECTION — مبني بالكامل من الـ JS عشان يشتغل من غير
-    // ما نحتاج نضيف عناصر ثابتة في الـ HTML يدويًا.
-    // بنستخدم wrapper بـ id ثابت عشان لو renderSettings() اتنادت تاني
-    // (بعد إضافة موظف/صنف مثلاً) منكررش القسم من جديد كل مرة.
-    // ============================================================
     const pinToggleHtml = `
         <div class="list-row" style="cursor:pointer;" onclick="toggleSettingsPin()">
             <div class="row-title">${t('تغيير PIN المالك', 'Change Owner PIN')}</div>
@@ -3919,23 +4034,30 @@ function renderSettings() {
     }
     pinToggleWrap.innerHTML = pinToggleHtml;
 
+    renderSettingsCategories();
+
     const groupedMenu = {};
     menuItems.forEach(item => {
-        const category = normalizeMenuCategory(item.category);
-        if (!groupedMenu[category]) groupedMenu[category] = [];
-        groupedMenu[category].push(item);
+        const catId = item.category_id || 'uncategorized';
+        if (!groupedMenu[catId]) groupedMenu[catId] = [];
+        groupedMenu[catId].push(item);
     });
     
     let menuHtml = '';
     if (menuItems.length === 0) {
         menuHtml = `<div class="empty"><i class="fa-solid fa-utensils"></i>${t('لسه مفيش أصناف', 'No items yet')}</div>`;
     } else {
-        for (const [category, items] of Object.entries(groupedMenu)) {
+        for (const [catId, items] of Object.entries(groupedMenu)) {
+            const categoryName = catId === 'uncategorized' ? t('بدون تصنيف', 'Uncategorized') : getCategoryName(catId);
+            const icon = catId === 'uncategorized' ? 'fa-tag' : getCategoryIcon(catId);
             menuHtml += `<div class="menu-category-group">`;
-            menuHtml += `<div class="menu-category-title" style="color:var(--teal);">${escapeHtml(menuCategoryLabel(category))}</div>`;
+            menuHtml += `<div class="menu-category-title" style="color:var(--teal);">
+                <i class="fa-solid ${icon}"></i> ${escapeHtml(categoryName)}
+            </div>`;
             items.forEach(m => {
                 menuHtml += `<div class="list-row">
-                    <div><div class="row-title">${escapeHtml(m.name)}</div><div class="row-sub">${escapeHtml(menuCategoryLabel(m.category))}</div></div>
+                    <div><div class="row-title">${escapeHtml(m.name)}</div>
+                    <div class="row-sub">${escapeHtml(categoryName)}</div></div>
                     <div class="row-actions">
                         <div class="row-value mono" style="margin-left:12px;">${money(m.price)}</div>
                         <button class="btn btn-ghost btn-sm" onclick="editMenuItem('${m.id}')"><i class="fa-solid fa-pen"></i></button>
@@ -3961,7 +4083,6 @@ function renderSettings() {
                 </div>
             </div>`).join('');
     
-    // ✅ تحديث حالة الـ Toggle (PIN)
     const pinSection = document.getElementById('settingsChangePin');
     const chevron = document.getElementById('settingsPinChevron');
     if (pinSection && chevron) {
@@ -3971,7 +4092,7 @@ function renderSettings() {
 }
 
 // ============================================================
-// 🔐 تغيير PIN المالك (جديد)
+// CHANGE OWNER PIN
 // ============================================================
 async function changeOwnerPin() {
     const currentPin = document.getElementById('currentPinInput').value.trim();
@@ -3984,13 +4105,11 @@ async function changeOwnerPin() {
         return; 
     }
     
-    // 🔍 التحقق من PIN الحالي
     if (currentPin !== business.owner_pin) { 
         errEl.textContent = t('❌ PIN الحالي غير صحيح.', '❌ Current PIN is incorrect.'); 
         return; 
     }
     
-    // ✅ التحقق من PIN الجديد
     if (!/^\d{4,6}$/.test(newPin)) { 
         errEl.textContent = t('❌ PIN الجديد لازم يكون 4-6 أرقام.', '❌ New PIN must be 4-6 digits.'); 
         return; 
@@ -4004,10 +4123,8 @@ async function changeOwnerPin() {
         
         if (error) throw error;
 
-        // ✅ تحديث المتغير المحلي
         business.owner_pin = newPin;
         
-        // 🧹 تنظيف الحقول
         document.getElementById('currentPinInput').value = '';
         document.getElementById('newPinInput').value = '';
         
@@ -4019,7 +4136,7 @@ async function changeOwnerPin() {
 }
 
 // ============================================================
-// 🏢 إنشاء نشاط جديد من صفحة الدخول (جديد)
+// CREATE BUSINESS FROM SETUP
 // ============================================================
 function openCreateBusinessSheetFromSetup() {
     ['newBizCodeSetup', 'newBizNameSetup', 'newBizPhoneSetup'].forEach(id => document.getElementById(id).value = '');
@@ -4033,7 +4150,7 @@ async function submitCreateBusinessFromSetup() {
     const name = document.getElementById('newBizNameSetup').value.trim();
     const phone = document.getElementById('newBizPhoneSetup').value.trim();
     const total_stations = parseInt(document.getElementById('newBizStationsSetup').value) || 4;
-    const owner_pin = '0000'; // ✅ PIN افتراضي
+    const owner_pin = '0000';
     const err = document.getElementById('createBizErrorSetup');
 
     if (!code || !name) { 
@@ -4063,7 +4180,6 @@ async function submitCreateBusinessFromSetup() {
         closeSheet('createBusinessSheetFromSetup');
         showToast(t('✅ تم إنشاء النشاط! استخدم الكود لتسجيل الدخول.', '✅ Business created! Use the code to login.'), 'success');
         
-        // 🚀 محاولة الدخول التلقائي
         document.getElementById('setupBusinessCode').value = code;
         handleSetupContinue();
     } catch (e) {
@@ -4072,14 +4188,29 @@ async function submitCreateBusinessFromSetup() {
     }
 }
 
+// ============================================================
+// MENU ITEM FUNCTIONS
+// ============================================================
 function openMenuItemSheet() {
     document.getElementById('menuItemId').value = '';
     document.getElementById('menuItemName').value = '';
     document.getElementById('menuItemPrice').value = '';
-    document.getElementById('menuItemCategory').value = 'cold_drinks';
     document.getElementById('menuDeleteBtn').style.display = 'none';
     document.getElementById('menuItemError').textContent = '';
     document.getElementById('menuItemSheetTitle').textContent = t('إضافة صنف للقائمة', 'Add Menu Item');
+    
+    const categorySelect = document.getElementById('menuItemCategory');
+    if (categorySelect) {
+        categorySelect.innerHTML = categories.map(cat => `
+            <option value="${cat.id}">
+                <i class="fa-solid ${cat.icon || 'fa-tag'}"></i> ${escapeHtml(cat.name)}
+            </option>
+        `).join('');
+        if (categories.length > 0) {
+            categorySelect.value = categories[0].id;
+        }
+    }
+    
     openSheet('menuItemOverlay');
 }
 
@@ -4089,10 +4220,22 @@ function editMenuItem(itemId) {
     document.getElementById('menuItemId').value = item.id;
     document.getElementById('menuItemName').value = item.name;
     document.getElementById('menuItemPrice').value = item.price;
-    document.getElementById('menuItemCategory').value = normalizeMenuCategory(item.category);
     document.getElementById('menuDeleteBtn').style.display = 'flex';
     document.getElementById('menuItemError').textContent = '';
     document.getElementById('menuItemSheetTitle').textContent = t('تعديل صنف', 'Edit Item');
+    
+    const categorySelect = document.getElementById('menuItemCategory');
+    if (categorySelect) {
+        categorySelect.innerHTML = categories.map(cat => `
+            <option value="${cat.id}" ${cat.id === item.category_id ? 'selected' : ''}>
+                ${escapeHtml(cat.name)}
+            </option>
+        `).join('');
+        if (item.category_id) {
+            categorySelect.value = item.category_id;
+        }
+    }
+    
     openSheet('menuItemOverlay');
 }
 
@@ -4100,7 +4243,7 @@ async function submitMenuItem() {
     const id = document.getElementById('menuItemId').value;
     const name = document.getElementById('menuItemName').value.trim();
     const price = parseFloat(document.getElementById('menuItemPrice').value);
-    const category = normalizeMenuCategory(document.getElementById('menuItemCategory').value);
+    const categoryId = document.getElementById('menuItemCategory').value;
     const errEl = document.getElementById('menuItemError');
     errEl.textContent = '';
     
@@ -4109,23 +4252,28 @@ async function submitMenuItem() {
         return; 
     }
     
+    if (!categoryId || categoryId === '') {
+        errEl.textContent = t('اختر تصنيفاً.', 'Select a category.');
+        return;
+    }
+    
     try {
         const newItem = {
             business_id: business.id,
             name: name,
             price: price,
-            category: category,
+            category_id: categoryId,
             active: true,
             created_at: new Date().toISOString()
         };
         
         let result;
         if (id) {
-            result = await updateMenuItemInDB(id, { name, price, category });
+            result = await updateMenuItemInDB(id, { name, price, category_id: categoryId });
             if (result) {
                 const idx = menuItems.findIndex(item => item.id === id);
                 if (idx !== -1) {
-                    menuItems[idx] = { ...menuItems[idx], name, price, category };
+                    menuItems[idx] = { ...menuItems[idx], name, price, category_id: categoryId };
                 }
                 showToast(t('تم تحديث الصنف', 'Item updated'), 'success');
             } else {
@@ -4147,12 +4295,8 @@ async function submitMenuItem() {
         renderStationOrdersSection();
     } catch (e) {
         console.error('Error in submitMenuItem:', e);
-        let errorMsg = e.message || 'Unknown error';
-        if (errorMsg.includes('check constraint') || errorMsg.includes('menu_items_category_check')) {
-            errorMsg = 'مشكلة في قاعدة البيانات: عمود التصنيف لا يقبل هذه القيمة. شغّل ملف SQL الخاص بـ V2 على Supabase ثم جرّب مرة أخرى.';
-        }
-        errEl.textContent = t('حصل خطأ: ' + errorMsg, 'Error: ' + errorMsg);
-        showToast(t('فشل حفظ الصنف: ' + errorMsg, 'Failed to save item: ' + errorMsg), 'error');
+        errEl.textContent = t('حصل خطأ: ' + e.message, 'Error: ' + e.message);
+        showToast(t('فشل حفظ الصنف', 'Failed to save item'), 'error');
     }
 }
 
@@ -4183,9 +4327,55 @@ async function deleteMenuItem() {
 }
 
 // ============================================================
+// EMPLOYEE FUNCTIONS
+// ============================================================
+function openEmployeeSheet() {
+    document.getElementById('employeeName').value = '';
+    document.getElementById('employeePin').value = '';
+    document.getElementById('employeeError').textContent = '';
+    document.getElementById('permStations').checked = true;
+    document.getElementById('permShift').checked = false;
+    document.getElementById('permSettings').checked = false;
+    openSheet('employeeOverlay');
+}
+
+async function submitEmployee() {
+    const name = document.getElementById('employeeName').value.trim();
+    const pin = document.getElementById('employeePin').value.trim();
+    if (!name || !/^\d{4,6}$/.test(pin)) { document.getElementById('employeeError').textContent = t('اكتب اسم و PIN من 4 لـ 6 أرقام.', 'Enter name and 4-6 digit PIN.'); return; }
+    const permissions = {
+        stations: document.getElementById('permStations').checked,
+        shift: document.getElementById('permShift').checked,
+        settings: document.getElementById('permSettings').checked
+    };
+    const { data, error } = await supabaseClient.from('employees').insert({ business_id: business.id, name, pin, permissions }).select();
+    if (error || !data || data.length === 0) {
+        document.getElementById('employeeError').textContent = t('فشل حفظ الموظف، حاول تاني.', 'Failed to save employee, try again.');
+        console.error('Error adding employee:', error);
+        return;
+    }
+    closeSheet('employeeOverlay'); showToast(t('تمت إضافة الموظف', 'Employee added'), 'success');
+    await loadEmployees(); renderSettings();
+}
+
+async function deleteEmployee(employeeId) {
+    if (!confirm(t('هل أنت متأكد من حذف هذا الموظف؟', 'Are you sure you want to delete this employee?'))) return;
+    try {
+        const { error } = await supabaseClient.from('employees').delete().eq('id', employeeId).eq('business_id', business.id);
+        if (error) throw error;
+        showToast(t('تم حذف الموظف', 'Employee deleted'), 'success');
+        await loadEmployees();
+        renderSettings();
+    } catch (e) {
+        console.error('Error deleting employee:', e);
+        showToast(t('فشل حذف الموظف', 'Failed to delete employee'), 'error');
+    }
+}
+
+// ============================================================
 // PDF MENU IMPORT
 // ============================================================
-let pdfImportParsedData = null; // [{ name: string|null, category: 'cold_drinks'|'hot_drinks'|'food'|'other', items: [{tempId,name,price,include}] }]
+let pdfImportParsedData = null;
 
 function openPdfImportSheet() {
     document.getElementById('pdfImportFileInput').value = '';
@@ -4203,8 +4393,6 @@ function cancelPdfImportReview() {
     pdfImportParsedData = null;
 }
 
-// Groups raw pdf.js text items (from getTextContent) into visual lines by Y position,
-// keeping the max font size per line to help tell category headers from item lines.
 function groupPdfTextIntoLines(items) {
     const rows = [];
     items.forEach(item => {
@@ -4228,7 +4416,6 @@ function groupPdfTextIntoLines(items) {
     }).filter(l => l.text);
 }
 
-// Pulls a trailing price (with optional dot-leaders and currency word) off the end of a line.
 function extractPriceFromPdfLine(text) {
     const regex = /([.\-_·•\s]{2,}|\s)(\d+(?:[.,]\d{1,2})?)\s*(ج\.?م\.?|جنيه(?:اً|ا)?|جنيه مصري|EGP|LE|L\.E\.?|\$|USD|EUR|€)?\s*$/i;
     const match = text.match(regex);
@@ -4240,7 +4427,6 @@ function extractPriceFromPdfLine(text) {
     return { name, price };
 }
 
-// Best-effort mapping of a detected header/category text to this app's fixed 4 categories.
 function guessMenuCategoryFromText(text) {
     const v = String(text || '').trim().toLowerCase();
     if (!v) return 'other';
@@ -4253,8 +4439,6 @@ function guessMenuCategoryFromText(text) {
     return 'other';
 }
 
-// Heuristic parser: lines ending in a price become items; short lines in a noticeably bigger
-// font (and with no price) become category headers that group the items under them.
 function parseMenuLinesIntoGroups(lines) {
     const withPrice = lines.map(l => ({ ...l, priceInfo: extractPriceFromPdfLine(l.text) }));
     const itemFontSizes = withPrice.filter(l => l.priceInfo).map(l => l.fontSize);
@@ -4284,12 +4468,10 @@ function parseMenuLinesIntoGroups(lines) {
                 pushCurrentGroup();
                 currentGroup = { name: text, items: [] };
             }
-            // otherwise treat as noise/description and ignore it
         }
     });
     pushCurrentGroup();
 
-    // merge groups that share the same header text (e.g. repeated across pages)
     const merged = [];
     groups.forEach(g => {
         const existing = merged.find(m => (m.name || '').trim().toLowerCase() === (g.name || '').trim().toLowerCase());
@@ -4299,6 +4481,9 @@ function parseMenuLinesIntoGroups(lines) {
     return merged.map(g => ({ ...g, category: guessMenuCategoryFromText(g.name) }));
 }
 
+// ============================================================
+// PDF IMPORT WITH CATEGORIES
+// ============================================================
 async function analyzePdfMenu() {
     const fileInput = document.getElementById('pdfImportFileInput');
     const statusEl = document.getElementById('pdfImportStatus');
@@ -4320,6 +4505,8 @@ async function analyzePdfMenu() {
     statusEl.textContent = t('⏳ جاري قراءة الملف...', '⏳ Reading file...');
 
     try {
+        await loadCategories();
+        
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
         }
@@ -4334,7 +4521,8 @@ async function analyzePdfMenu() {
         }
 
         statusEl.textContent = t('⏳ جاري تحليل الأصناف والتصنيفات...', '⏳ Analyzing items and categories...');
-        const parsed = parseMenuLinesIntoGroups(allLines);
+        
+        const parsed = await parseMenuLinesIntoGroupsWithCategories(allLines);
 
         if (!parsed.length || parsed.every(g => g.items.length === 0)) {
             statusEl.textContent = '';
@@ -4346,7 +4534,7 @@ async function analyzePdfMenu() {
         pdfImportParsedData = parsed;
         statusEl.textContent = '';
         btn.disabled = false;
-        renderPdfImportReview();
+        renderPdfImportReviewWithCategories();
         document.getElementById('pdfImportUploadStep').style.display = 'none';
         document.getElementById('pdfImportReviewStep').style.display = 'block';
     } catch (e) {
@@ -4357,7 +4545,58 @@ async function analyzePdfMenu() {
     }
 }
 
-function renderPdfImportReview() {
+async function parseMenuLinesIntoGroupsWithCategories(lines) {
+    const withPrice = lines.map(l => ({ ...l, priceInfo: extractPriceFromPdfLine(l.text) }));
+    const itemFontSizes = withPrice.filter(l => l.priceInfo).map(l => l.fontSize);
+    const avgItemFontSize = itemFontSizes.length ? itemFontSizes.reduce((a, b) => a + b, 0) / itemFontSizes.length : 12;
+
+    const groups = [];
+    let currentGroup = { name: null, items: [] };
+    let itemCounter = 0;
+
+    const pushCurrentGroup = () => { if (currentGroup.items.length > 0) groups.push(currentGroup); };
+
+    for (const line of withPrice) {
+        const text = line.text.trim();
+        if (!text) continue;
+        if (line.priceInfo) {
+            itemCounter++;
+            currentGroup.items.push({
+                tempId: 'pdfitem_' + itemCounter,
+                name: line.priceInfo.name,
+                price: line.priceInfo.price,
+                include: true
+            });
+        } else {
+            const wordCount = text.split(/\s+/).length;
+            const isBigger = line.fontSize >= avgItemFontSize * 1.12;
+            if (wordCount <= 6 && text.length <= 40 && isBigger) {
+                pushCurrentGroup();
+                const category = await getOrCreateCategoryFromText(text);
+                currentGroup = { 
+                    name: text, 
+                    category: category ? category.id : null,
+                    categoryName: category ? category.name : text,
+                    items: [] 
+                };
+            }
+        }
+    }
+    pushCurrentGroup();
+
+    const merged = [];
+    groups.forEach(g => {
+        const existing = merged.find(m => (m.name || '').trim().toLowerCase() === (g.name || '').trim().toLowerCase());
+        if (existing) {
+            existing.items.push(...g.items);
+        } else {
+            merged.push(g);
+        }
+    });
+    return merged;
+}
+
+function renderPdfImportReviewWithCategories() {
     const container = document.getElementById('pdfImportPreviewList');
     if (!pdfImportParsedData || pdfImportParsedData.length === 0) {
         container.innerHTML = `<div class="empty">${t('مفيش أصناف اتقرأت', 'No items found')}</div>`;
@@ -4367,21 +4606,21 @@ function renderPdfImportReview() {
     const totalItems = pdfImportParsedData.reduce((sum, g) => sum + g.items.length, 0);
     let html = `<div style="font-size:13px;font-weight:700;color:var(--amber);margin-bottom:10px;">${t(`✅ تم العثور على ${totalItems} صنف`, `✅ Found ${totalItems} items`)}</div>`;
 
-    const categoryOptions = [
-        { value: 'cold_drinks', label: t('🧊 مشروبات باردة', '🧊 Cold Drinks') },
-        { value: 'hot_drinks', label: t('☕ مشروبات ساخنة', '☕ Hot Drinks') },
-        { value: 'food', label: t('🍔 أكل', '🍔 Food') },
-        { value: 'other', label: t('📦 أخرى', '📦 Other') }
-    ];
-
     pdfImportParsedData.forEach((group, gIdx) => {
+        const categoryOptions = categories.map(cat => 
+            `<option value="${cat.id}" ${group.category === cat.id ? 'selected' : ''}>${escapeHtml(cat.name)}</option>`
+        ).join('');
+        
         html += `<div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px;margin-bottom:10px;">`;
         html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
                     <i class="fa-solid fa-tags" style="color:var(--amber);flex-shrink:0;"></i>
                     <span style="font-size:12.5px;color:var(--text-dim);flex-shrink:0;">${group.name ? escapeHtml(group.name) : t('بدون عنوان', 'No header')}</span>
-                    <select id="pdfGroupCat_${gIdx}" style="flex:1;min-width:130px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
-                        ${categoryOptions.map(opt => `<option value="${opt.value}" ${group.category === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
+                    <select id="pdfGroupCat_${gIdx}" style="flex:1;min-width:150px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
+                        ${categoryOptions}
                     </select>
+                    <button class="btn btn-sm btn-ghost" onclick="createCategoryFromPdf('${gIdx}')" style="padding:4px 10px;font-size:11px;">
+                        <i class="fa-solid fa-plus"></i> ${t('جديد', 'New')}
+                    </button>
                 </div>`;
 
         group.items.forEach(item => {
@@ -4396,6 +4635,28 @@ function renderPdfImportReview() {
     });
 
     container.innerHTML = html;
+}
+
+async function createCategoryFromPdf(groupIndex) {
+    const group = pdfImportParsedData[groupIndex];
+    if (!group) return;
+    
+    const categoryName = prompt(t('أدخل اسم التصنيف الجديد', 'Enter new category name'), group.name || '');
+    if (!categoryName) return;
+    
+    const newCategory = await addCategory(categoryName);
+    if (newCategory) {
+        const select = document.getElementById(`pdfGroupCat_${groupIndex}`);
+        if (select) {
+            const option = document.createElement('option');
+            option.value = newCategory.id;
+            option.textContent = newCategory.name;
+            option.selected = true;
+            select.appendChild(option);
+        }
+        group.category = newCategory.id;
+        group.categoryName = newCategory.name;
+    }
 }
 
 async function confirmPdfImport() {
@@ -4418,7 +4679,17 @@ async function confirmPdfImport() {
             if (includedItems.length === 0) continue;
 
             const catSelect = document.getElementById(`pdfGroupCat_${gIdx}`);
-            const category = normalizeMenuCategory(catSelect.value);
+            let categoryId = catSelect ? catSelect.value : group.category;
+            
+            if (!categoryId || categoryId === '') {
+                const newCat = await getOrCreateCategoryFromText(group.name || t('أخرى', 'Other'));
+                if (newCat) {
+                    categoryId = newCat.id;
+                } else {
+                    hadError = true;
+                    continue;
+                }
+            }
 
             for (const item of includedItems) {
                 const nameVal = document.getElementById(`pdfItemName_${item.tempId}`).value.trim();
@@ -4429,7 +4700,7 @@ async function confirmPdfImport() {
                         business_id: business.id,
                         name: nameVal,
                         price: priceVal,
-                        category: category,
+                        category_id: categoryId,
                         active: true,
                         created_at: new Date().toISOString()
                     };
@@ -4471,55 +4742,6 @@ async function confirmPdfImport() {
     }
 }
 
-function openEmployeeSheet() {
-    document.getElementById('employeeName').value = '';
-    document.getElementById('employeePin').value = '';
-    document.getElementById('employeeError').textContent = '';
-    document.getElementById('permStations').checked = true;
-    document.getElementById('permShift').checked = false;
-    document.getElementById('permSettings').checked = false;
-    openSheet('employeeOverlay');
-}
-async function submitEmployee() {
-    const name = document.getElementById('employeeName').value.trim();
-    const pin = document.getElementById('employeePin').value.trim();
-    if (!name || !/^\d{4,6}$/.test(pin)) { document.getElementById('employeeError').textContent = t('اكتب اسم و PIN من 4 لـ 6 أرقام.', 'Enter name and 4-6 digit PIN.'); return; }
-    const permissions = {
-        stations: document.getElementById('permStations').checked,
-        shift: document.getElementById('permShift').checked,
-        settings: document.getElementById('permSettings').checked
-    };
-    const { data, error } = await supabaseClient.from('employees').insert({ business_id: business.id, name, pin, permissions }).select();
-    if (error || !data || data.length === 0) {
-        document.getElementById('employeeError').textContent = t('فشل حفظ الموظف، حاول تاني.', 'Failed to save employee, try again.');
-        console.error('Error adding employee:', error);
-        return;
-    }
-    closeSheet('employeeOverlay'); showToast(t('تمت إضافة الموظف', 'Employee added'), 'success');
-    await loadEmployees(); renderSettings();
-}
-
-async function deleteEmployee(employeeId) {
-    if (!confirm(t('هل أنت متأكد من حذف هذا الموظف؟', 'Are you sure you want to delete this employee?'))) return;
-    try {
-        const { error } = await supabaseClient.from('employees').delete().eq('id', employeeId).eq('business_id', business.id);
-        if (error) throw error;
-        showToast(t('تم حذف الموظف', 'Employee deleted'), 'success');
-        await loadEmployees();
-        renderSettings();
-    } catch (e) {
-        console.error('Error deleting employee:', e);
-        showToast(t('فشل حذف الموظف', 'Failed to delete employee'), 'error');
-    }
-}
-
-function escapeHtml(str) { 
-    if (!str) return '';
-    const d = document.createElement('div'); 
-    d.textContent = str; 
-    return d.innerHTML; 
-}
-
 // ============================================================
 // SESSION RECOVERY
 // ============================================================
@@ -4556,14 +4778,12 @@ async function refreshStationSheetContent(stationId) {
     const session = sessions[stationId];
     if (!session || !st) return;
     
-    // ✅ تحديث الكاش عشان نجيب أحدث بيانات
     sessionSegmentsCache[session.id] = null;
     activeSegmentCache[session.id] = null;
     
     const body = document.getElementById('stationSheetBody');
     if (!body) return;
     
-    // ✅ الطلبات المستقلة عن بعض بتتجاب مرة واحدة على التوازي بدل التوالي
     const [segments, ordersResult, prepaidTotal] = await Promise.all([
         getSessionSegments(session.id),
         supabaseClient.from('session_orders').select('*').eq('session_id', session.id).order('created_at'),
@@ -4573,7 +4793,6 @@ async function refreshStationSheetContent(stationId) {
     activeSegmentCache[session.id] = activeSeg || null;
     activeSessionOrders = ordersResult.data || [];
 
-    // ✅ الحسابات دي بقت بتتم محليًا من غير أي طلب شبكة إضافي
     const totals = computeTotalsFromData(segments, activeSessionOrders, prepaidTotal);
 
     if (st.station_type === 'drinks') {
@@ -4690,7 +4909,7 @@ async function refreshStationSheetContent(stationId) {
 }
 
 // ============================================================
-// SWITCH MODE - UPDATED (يدعم التنازلي مع مراعاة الوقت)
+// SWITCH MODE
 // ============================================================
 async function handleSwitchMode(sessionId, newMode, stationId) {
     if (pendingSwitch) return;
