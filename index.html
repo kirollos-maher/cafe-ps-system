@@ -334,6 +334,11 @@
         <div class="section-title" data-ar="الاشتراك" data-en="Subscription">الاشتراك</div>
         <div class="panel" id="settingsSubscription"></div>
 
+        <!-- ✅ تصنيفات المنيو -->
+        <div class="section-title" data-ar="تصنيفات المنيو" data-en="Menu Categories">تصنيفات المنيو</div>
+        <div class="panel" id="settingsMenuCategories"></div>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openMenuCategorySheet()"><i class="fa-solid fa-plus"></i> <span data-ar="إضافة تصنيف" data-en="Add Category">إضافة تصنيف</span></button>
+
         <!-- ✅ قائمة الأكل والمشروبات -->
         <div class="section-title" data-ar="قائمة الأكل والمشروبات" data-en="Food & Drinks Menu">قائمة الأكل والمشروبات</div>
         <div class="panel" id="settingsMenu"></div>
@@ -475,6 +480,27 @@
         </div>
     </div>
 
+    <!-- ============== MENU CATEGORY SHEET ============== -->
+    <div class="overlay" id="menuCategoryOverlay">
+        <div class="sheet">
+            <div class="sheet-handle"></div>
+            <div class="sheet-title"><span id="menuCategoryTitle" data-ar="إضافة تصنيف" data-en="Add Category">إضافة تصنيف</span><button class="close-x" onclick="closeSheet('menuCategoryOverlay')"><i class="fa-solid fa-xmark"></i></button></div>
+            <input type="hidden" id="menuCategoryId">
+            <input type="hidden" id="menuCategoryKey">
+            <div class="field">
+                <label data-ar="اسم التصنيف" data-en="Category Name">اسم التصنيف</label>
+                <input type="text" id="menuCategoryName" placeholder="مثال: حلويات">
+            </div>
+            <div class="field">
+                <label data-ar="الأيقونة (إيموجي)" data-en="Icon (emoji)">الأيقونة (إيموجي)</label>
+                <input type="text" id="menuCategoryIcon" maxlength="4" placeholder="📦" style="width:80px;">
+            </div>
+            <button class="btn btn-amber btn-block" onclick="submitMenuCategory()"><span data-ar="حفظ" data-en="Save">حفظ</span></button>
+            <button class="btn btn-red btn-block" style="margin-top:8px;display:none;" id="menuCategoryDeleteBtn" onclick="deleteMenuCategory()"><i class="fa-solid fa-trash"></i> <span data-ar="حذف التصنيف" data-en="Delete Category">حذف التصنيف</span></button>
+            <div class="error-text" id="menuCategoryError"></div>
+        </div>
+    </div>
+
     <!-- ============== EXPENSE SHEET ============== -->
     <div class="overlay" id="expenseOverlay">
         <div class="sheet">
@@ -516,12 +542,7 @@
             </div>
             <div class="field">
                 <label data-ar="التصنيف" data-en="Category">التصنيف</label>
-                <select id="menuItemCategory">
-                    <option value="cold_drinks">🧊 مشروبات باردة</option>
-                    <option value="hot_drinks">☕ مشروبات ساخنة</option>
-                    <option value="food">🍔 أكل</option>
-                    <option value="other">📦 أخرى</option>
-                </select>
+                <select id="menuItemCategory"></select>
             </div>
             <button class="btn btn-amber btn-block" onclick="submitMenuItem()"><span data-ar="حفظ" data-en="Save">حفظ</span></button>
             <button class="btn btn-red btn-block" style="margin-top:8px;display:none;" id="menuDeleteBtn" onclick="deleteMenuItem()"><i class="fa-solid fa-trash"></i> <span data-ar="حذف الصنف" data-en="Delete Item">حذف الصنف</span></button>
