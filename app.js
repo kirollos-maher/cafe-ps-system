@@ -113,7 +113,6 @@ let sessions = {};
 let menuItems = [];
 let employees = [];
 let paymentMethods = [];
-let menuCategories = [];
 let currentShift = null;
 let currentUser = null;
 let realtimeChannel = null;
@@ -468,7 +467,6 @@ async function loadAllData() {
     renderStationsGrid();
     renderSettingsStations();
     renderSettingsPaymentMethods();
-    renderSettingsMenuCategories();
 }
 
 async function loadStations() {
@@ -493,6 +491,134 @@ async function loadStations() {
     );
     sessions = {};
     (activeResult.data || []).forEach(s => { sessions[s.station_id] = s; });
+}
+
+// ============================================================
+// MENU CATEGORIES - dynamic (add/remove), with localStorage fallback
+// ============================================================
+let menuCategories = []; // [{ key, label_ar, label_en, id? }]
+
+const DEFAULT_MENU_CATEGORIES = [
+    { key: 'cold_drinks', label_ar: '🧊 مشروبات باردة', label_en: '🧊 Cold Drinks' },
+    { key: 'hot_drinks', label_ar: '☕ مشروبات ساخنة', label_en: '☕ Hot Drinks' },
+    { key: 'food', label_ar: '🍔 أكل', label_en: '🍔 Food' },
+    { key: 'other', label_ar: '📦 أخرى', label_en: '📦 Other' }
+];
+
+async function loadMenuCategories() {
+    const localKey = 'psr_menu_categories_' + business.id;
+    try {
+        const { data, error } = await supabaseClient.from('menu_categories').select('*').eq('business_id', business.id).order('created_at');
+        if (error) throw error;
+        if (Array.isArray(data) && data.length > 0) {
+            menuCategories = data;
+            localStorage.setItem(localKey, JSON.stringify(data));
+            return;
+        }
+        // الجدول موجود بس لسه فاضي لهذا النشاط - استخدم أي حاجة محفوظة محلياً وإلا الافتراضي
+        const localData = localStorage.getItem(localKey);
+        menuCategories = localData ? JSON.parse(localData) : DEFAULT_MENU_CATEGORIES.map(c => ({ ...c }));
+    } catch (e) {
+        // جدول menu_categories لسه مش متعمل في قاعدة البيانات (V2 SQL لسه ما اتشغلش) أو حصل خطأ شبكة
+        // -> نشتغل بالتخزين المحلي عشان الميزة تفضل شغالة على الجهاز ده
+        console.warn('menu_categories not available from DB, using local storage fallback:', e);
+        const localData = localStorage.getItem(localKey);
+        menuCategories = localData ? JSON.parse(localData) : DEFAULT_MENU_CATEGORIES.map(c => ({ ...c }));
+    }
+}
+
+async function addMenuCategory(labelAr, labelEn) {
+    const name = String(labelAr || '').trim();
+    if (!name) throw new Error(t('اكتب اسم التصنيف', 'Enter a category name'));
+    if (menuCategories.some(c => t(c.label_ar, c.label_en).trim().toLowerCase() === name.toLowerCase())) {
+        throw new Error(t('التصنيف ده موجود بالفعل', 'This category already exists'));
+    }
+    const key = 'cat_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const payload = { business_id: business.id, key, label_ar: name, label_en: String(labelEn || name).trim() };
+    let saved = { ...payload, id: null };
+    try {
+        const { data, error } = await supabaseClient.from('menu_categories').insert(payload).select().single();
+        if (error) throw error;
+        saved = data;
+    } catch (e) {
+        console.warn('Saving category to DB failed, keeping it local only for now:', e);
+    }
+    menuCategories.push(saved);
+    localStorage.setItem('psr_menu_categories_' + business.id, JSON.stringify(menuCategories));
+    return saved;
+}
+
+async function deleteMenuCategoryByKey(key) {
+    if (menuItems.some(m => normalizeMenuCategory(m.category) === key)) {
+        throw new Error(t('في أصناف مستخدمة في التصنيف ده — انقلها لتصنيف تاني أو احذفها الأول', 'This category still has items in it — move or delete them first'));
+    }
+    if (menuCategories.length <= 1) {
+        throw new Error(t('لازم يفضل تصنيف واحد على الأقل', 'At least one category must remain'));
+    }
+    const cat = menuCategories.find(c => c.key === key);
+    menuCategories = menuCategories.filter(c => c.key !== key);
+    try {
+        if (cat && cat.id) {
+            await supabaseClient.from('menu_categories').delete().eq('id', cat.id).eq('business_id', business.id);
+        }
+    } catch (e) {
+        console.warn('Deleting category from DB failed:', e);
+    }
+    localStorage.setItem('psr_menu_categories_' + business.id, JSON.stringify(menuCategories));
+}
+
+function populateMenuCategorySelect(selectedKey) {
+    const sel = document.getElementById('menuItemCategory');
+    if (!sel) return;
+    sel.innerHTML = menuCategories.map(c => `<option value="${escapeHtml(c.key)}">${escapeHtml(t(c.label_ar, c.label_en))}</option>`).join('');
+    if (selectedKey) sel.value = selectedKey;
+}
+
+function renderSettingsCategories() {
+    const el = document.getElementById('settingsMenuCategories');
+    if (!el) return;
+    if (!menuCategories.length) {
+        el.innerHTML = `<div class="empty">${t('لسه مفيش تصنيفات', 'No categories yet')}</div>`;
+        return;
+    }
+    el.innerHTML = menuCategories.map(c => {
+        const count = menuItems.filter(m => normalizeMenuCategory(m.category) === c.key).length;
+        return `<div class="list-row">
+            <div><div class="row-title">${escapeHtml(t(c.label_ar, c.label_en))}</div><div class="row-sub">${escapeHtml(t(`${count} صنف`, `${count} items`))}</div></div>
+            <button class="btn btn-danger-sm" onclick="deleteCategoryByKey('${c.key}')" title="${t('حذف التصنيف', 'Delete category')}"><i class="fa-solid fa-trash"></i></button>
+        </div>`;
+    }).join('');
+}
+
+function openCategorySheet() {
+    document.getElementById('categoryName').value = '';
+    document.getElementById('categoryError').textContent = '';
+    openSheet('categoryOverlay');
+}
+
+async function submitCategory() {
+    const name = document.getElementById('categoryName').value.trim();
+    const errEl = document.getElementById('categoryError');
+    errEl.textContent = '';
+    try {
+        await addMenuCategory(name, name);
+        closeSheet('categoryOverlay');
+        renderSettingsCategories();
+        showToast(t('تم إضافة التصنيف', 'Category added'), 'success');
+    } catch (e) {
+        errEl.textContent = e.message || t('حصل خطأ، حاول تاني', 'Error, try again');
+    }
+}
+
+async function deleteCategoryByKey(key) {
+    if (!confirm(t('هل أنت متأكد من حذف هذا التصنيف؟', 'Are you sure you want to delete this category?'))) return;
+    try {
+        await deleteMenuCategoryByKey(key);
+        renderSettingsCategories();
+        showToast(t('تم حذف التصنيف', 'Category deleted'), 'success');
+    } catch (e) {
+        showToast(e.message || t('فشل الحذف', 'Delete failed'), 'error');
+    }
 }
 
 // ============================================================
@@ -593,214 +719,6 @@ async function loadPaymentMethods() {
         id: 'temp_' + Date.now() + '_' + i,
         created_at: new Date().toISOString()
     }));
-}
-
-// ============================================================
-// MENU CATEGORIES (dynamic — user can add/remove; PDF import can propose new ones)
-// ============================================================
-async function loadMenuCategories() {
-    try {
-        const { data, error } = await supabaseClient.from('menu_categories').select('*').eq('business_id', business.id).order('sort_order').order('created_at');
-        if (error) throw error;
-        if (data && data.length > 0) {
-            menuCategories = data;
-            return;
-        }
-    } catch (e) {
-        console.warn('Error loading menu categories (did you run the menu_categories migration?):', e);
-    }
-
-    // Seed the classic 4 categories on first run, using the SAME keys the app
-    // has always stored on menu_items.category — so existing items keep working.
-    const defaults = [
-        { business_id: business.id, key: 'cold_drinks', name: t('مشروبات باردة', 'Cold Drinks'), icon: '🧊', sort_order: 0 },
-        { business_id: business.id, key: 'hot_drinks', name: t('مشروبات ساخنة', 'Hot Drinks'), icon: '☕', sort_order: 1 },
-        { business_id: business.id, key: 'food', name: t('أكل', 'Food'), icon: '🍔', sort_order: 2 },
-        { business_id: business.id, key: 'other', name: t('أخرى', 'Other'), icon: '📦', sort_order: 3 }
-    ];
-
-    try {
-        const { data: created, error } = await supabaseClient.from('menu_categories').insert(defaults).select();
-        if (!error && created) {
-            menuCategories = created;
-            return;
-        }
-    } catch (e) {
-        console.warn('Could not create default menu categories:', e);
-    }
-
-    menuCategories = defaults.map((c, i) => ({ ...c, id: 'temp_' + Date.now() + '_' + i, created_at: new Date().toISOString() }));
-}
-
-// Generates a short opaque key for a brand-new category (not meant to be human-read; the
-// display text always comes from the category's `name`/`icon` fields).
-function generateMenuCategoryKey() {
-    return 'cat_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
-
-// Creates a category in the DB (used both by the settings sheet and by PDF import
-// when the user confirms adding a proposed new category) and keeps menuCategories in sync.
-async function createMenuCategory(name, icon) {
-    const cleanName = String(name || '').trim();
-    if (!cleanName) return null;
-    const payload = {
-        business_id: business.id,
-        key: generateMenuCategoryKey(),
-        name: cleanName,
-        icon: (icon || '📦').trim() || '📦',
-        sort_order: menuCategories.length
-    };
-    const { data, error } = await supabaseClient.from('menu_categories').insert(payload).select().single();
-    if (error) throw error;
-    menuCategories.push(data);
-    return data;
-}
-
-// Looks up a stored category value (its `key`) against the loaded categories list.
-// Unknown/legacy values are still returned as-is so items never silently disappear —
-// menuCategoryLabel() falls back to showing the raw value in that case.
-function normalizeMenuCategory(category) {
-    const raw = String(category || '').trim();
-    if (!raw) return menuCategories[0] ? menuCategories[0].key : 'other';
-    const byKey = menuCategories.find(c => c.key.toLowerCase() === raw.toLowerCase());
-    if (byKey) return byKey.key;
-    const byName = menuCategories.find(c => (c.name || '').trim().toLowerCase() === raw.toLowerCase());
-    if (byName) return byName.key;
-    return raw;
-}
-
-function menuCategoryLabel(category) {
-    const key = normalizeMenuCategory(category);
-    const cat = menuCategories.find(c => c.key === key);
-    if (cat) return `${cat.icon || '📦'} ${cat.name}`;
-    return `📦 ${key}`;
-}
-
-// Builds <option> HTML for a category <select>, in the user's own sort order.
-// When newCategoryLabel is provided, an extra "✨ create new category" option is appended.
-function getMenuCategoryOptionsHtml(selectedKey, newCategoryLabel) {
-    let html = menuCategories.map(c =>
-        `<option value="${escapeHtml(c.key)}" ${c.key === selectedKey ? 'selected' : ''}>${escapeHtml(c.icon || '📦')} ${escapeHtml(c.name)}</option>`
-    ).join('');
-    if (newCategoryLabel) {
-        html += `<option value="__new__" ${selectedKey === '__new__' ? 'selected' : ''}>✨ ${escapeHtml(newCategoryLabel)}</option>`;
-    }
-    return html;
-}
-
-function renderSettingsMenuCategories() {
-    const el = document.getElementById('settingsMenuCategories');
-    if (!el) return;
-    if (!menuCategories || menuCategories.length === 0) {
-        el.innerHTML = `<div class="empty"><i class="fa-solid fa-tags"></i>${t('مفيش تصنيفات — ضيف أول تصنيف', 'No categories — add your first category')}</div>`;
-        return;
-    }
-    el.innerHTML = menuCategories.map(c => {
-        const count = menuItems.filter(m => normalizeMenuCategory(m.category) === c.key).length;
-        return `<div class="list-row">
-            <div><div class="row-title">${escapeHtml(c.icon || '📦')} ${escapeHtml(c.name)}</div>
-            <div class="row-sub">${t(`${count} صنف`, `${count} item(s)`)}</div></div>
-            <div class="row-actions">
-                <button class="btn btn-ghost btn-sm" onclick="editMenuCategory('${c.id}')"><i class="fa-solid fa-pen"></i></button>
-                <button class="btn btn-danger-sm" onclick="deleteMenuCategoryById('${c.id}')"><i class="fa-solid fa-trash"></i></button>
-            </div>
-        </div>`;
-    }).join('');
-}
-
-function openMenuCategorySheet() {
-    document.getElementById('menuCategoryId').value = '';
-    document.getElementById('menuCategoryKey').value = '';
-    document.getElementById('menuCategoryName').value = '';
-    document.getElementById('menuCategoryIcon').value = '📦';
-    document.getElementById('menuCategoryDeleteBtn').style.display = 'none';
-    document.getElementById('menuCategoryError').textContent = '';
-    document.getElementById('menuCategoryTitle').textContent = t('إضافة تصنيف', 'Add Category');
-    openSheet('menuCategoryOverlay');
-}
-
-function editMenuCategory(catId) {
-    const cat = menuCategories.find(c => c.id === catId);
-    if (!cat) return;
-    document.getElementById('menuCategoryId').value = cat.id;
-    document.getElementById('menuCategoryKey').value = cat.key;
-    document.getElementById('menuCategoryName').value = cat.name;
-    document.getElementById('menuCategoryIcon').value = cat.icon || '📦';
-    document.getElementById('menuCategoryDeleteBtn').style.display = 'flex';
-    document.getElementById('menuCategoryError').textContent = '';
-    document.getElementById('menuCategoryTitle').textContent = t('تعديل تصنيف', 'Edit Category');
-    openSheet('menuCategoryOverlay');
-}
-
-async function submitMenuCategory() {
-    const id = document.getElementById('menuCategoryId').value;
-    const name = document.getElementById('menuCategoryName').value.trim();
-    const icon = document.getElementById('menuCategoryIcon').value.trim() || '📦';
-    const errEl = document.getElementById('menuCategoryError');
-    errEl.textContent = '';
-
-    if (!name) { errEl.textContent = t('اسم التصنيف مطلوب.', 'Category name is required.'); return; }
-
-    try {
-        if (id) {
-            const { error } = await supabaseClient.from('menu_categories').update({ name, icon }).eq('id', id);
-            if (error) throw error;
-            showToast(t('تم تحديث التصنيف', 'Category updated'), 'success');
-        } else {
-            await createMenuCategory(name, icon);
-            showToast(t('تم إضافة التصنيف', 'Category added'), 'success');
-        }
-        closeSheet('menuCategoryOverlay');
-        await loadMenuCategories();
-        renderSettingsMenuCategories();
-        renderSettings();
-        renderMenuQuickAdd();
-    } catch (e) {
-        console.error('Error in submitMenuCategory:', e);
-        let errorMsg = e.message || 'Unknown error';
-        if (errorMsg.includes('menu_categories') && errorMsg.toLowerCase().includes('does not exist')) {
-            errorMsg = t('جدول التصنيفات مش موجود في قاعدة البيانات. شغّل ملف SQL الخاص بالتصنيفات على Supabase الأول.', 'The categories table does not exist in the database yet. Run the categories SQL migration on Supabase first.');
-        }
-        errEl.textContent = errorMsg;
-    }
-}
-
-async function deleteMenuCategoryById(catId) {
-    const cat = menuCategories.find(c => c.id === catId);
-    if (!cat) return;
-    if (menuCategories.length <= 1) {
-        showToast(t('لازم يفضل تصنيف واحد على الأقل.', 'At least one category must remain.'), 'error');
-        return;
-    }
-    const affectedCount = menuItems.filter(m => normalizeMenuCategory(m.category) === cat.key).length;
-    const warnMsg = affectedCount > 0
-        ? t(`هل أنت متأكد من حذف "${cat.name}"؟ الأصناف الـ${affectedCount} اللي فيه هتتنقل لتصنيف تاني.`, `Delete "${cat.name}"? Its ${affectedCount} item(s) will be moved to another category.`)
-        : t(`هل أنت متأكد من حذف "${cat.name}"؟`, `Delete "${cat.name}"?`);
-    if (!confirm(warnMsg)) return;
-
-    try {
-        const fallback = menuCategories.find(c => c.id !== catId);
-        if (affectedCount > 0 && fallback) {
-            await supabaseClient.from('menu_items').update({ category: fallback.key }).eq('business_id', business.id).eq('category', cat.key);
-        }
-        await supabaseClient.from('menu_categories').delete().eq('id', catId);
-        showToast(t('تم حذف التصنيف', 'Category deleted'), 'success');
-        await loadMenuCategories();
-        await loadMenuItems();
-        renderSettingsMenuCategories();
-        renderSettings();
-        renderMenuQuickAdd();
-    } catch (e) {
-        showToast(t('فشل الحذف، حاول تاني.', 'Delete failed, try again.'), 'error');
-        console.error(e);
-    }
-}
-
-async function deleteMenuCategory() {
-    const id = document.getElementById('menuCategoryId').value;
-    if (!id) return;
-    closeSheet('menuCategoryOverlay');
-    await deleteMenuCategoryById(id);
 }
 
 async function loadOrOpenShift() {
@@ -2758,6 +2676,33 @@ function drinksTableSheetHtml(stationId, totals) {
     `;
 }
 
+function normalizeMenuCategory(category) {
+    const value = String(category || '').trim().toLowerCase();
+    if (menuCategories.some(c => c.key === value)) return value;
+    // توافق مع بيانات/تسميات قديمة كانت بتتخزن كنص عربي أو إنجليزي بدل الـ key
+    const legacyMap = {
+        'مشروبات باردة': 'cold_drinks', 'cold drinks': 'cold_drinks',
+        'مشروبات ساخنة': 'hot_drinks', 'hot drinks': 'hot_drinks',
+        'أكل': 'food', 'اكل': 'food', 'food': 'food',
+        'أخرى': 'other', 'اخري': 'other', 'other': 'other'
+    };
+    const mapped = legacyMap[value];
+    if (mapped && menuCategories.some(c => c.key === mapped)) return mapped;
+    // لو لسه التصنيفات مش محملة، أو التصنيف اتحذف، رجّع أول تصنيف متاح
+    if (menuCategories.length > 0) return menuCategories[0].key;
+    return mapped || 'other';
+}
+
+function menuCategoryLabel(category) {
+    const key = normalizeMenuCategory(category);
+    const cat = menuCategories.find(c => c.key === key);
+    if (!cat) {
+        const fallback = DEFAULT_MENU_CATEGORIES.find(c => c.key === key);
+        return fallback ? t(fallback.label_ar, fallback.label_en) : key;
+    }
+    return t(cat.label_ar, cat.label_en);
+}
+
 function renderMenuQuickAdd() {
     const container = document.getElementById('menuQuickAdd');
     if (!container) return;
@@ -2775,14 +2720,7 @@ function renderMenuQuickAdd() {
     });
     
     let html = '';
-    const knownOrder = menuCategories.map(c => c.key);
-    const categoryNames = Object.keys(grouped).sort((a, b) => {
-        const ia = knownOrder.indexOf(a), ib = knownOrder.indexOf(b);
-        if (ia === -1 && ib === -1) return 0;
-        if (ia === -1) return 1;
-        if (ib === -1) return -1;
-        return ia - ib;
-    });
+    const categoryNames = Object.keys(grouped);
     
     for (let i = 0; i < categoryNames.length; i++) {
         const category = categoryNames[i];
@@ -4107,8 +4045,6 @@ function renderSettings() {
     }
     pinToggleWrap.innerHTML = pinToggleHtml;
 
-    renderSettingsMenuCategories();
-
     const groupedMenu = {};
     menuItems.forEach(item => {
         const category = normalizeMenuCategory(item.category);
@@ -4137,6 +4073,7 @@ function renderSettings() {
         }
     }
     document.getElementById('settingsMenu').innerHTML = menuHtml;
+    renderSettingsCategories();
 
     document.getElementById('settingsEmployees').innerHTML = employees.length === 0
         ? `<div class="empty"><i class="fa-solid fa-user-group"></i>${t('لسه مفيش موظفين', 'No employees yet')}</div>`
@@ -4266,7 +4203,7 @@ function openMenuItemSheet() {
     document.getElementById('menuItemId').value = '';
     document.getElementById('menuItemName').value = '';
     document.getElementById('menuItemPrice').value = '';
-    document.getElementById('menuItemCategory').innerHTML = getMenuCategoryOptionsHtml(menuCategories[0] ? menuCategories[0].key : 'other');
+    populateMenuCategorySelect(menuCategories[0] ? menuCategories[0].key : '');
     document.getElementById('menuDeleteBtn').style.display = 'none';
     document.getElementById('menuItemError').textContent = '';
     document.getElementById('menuItemSheetTitle').textContent = t('إضافة صنف للقائمة', 'Add Menu Item');
@@ -4279,7 +4216,7 @@ function editMenuItem(itemId) {
     document.getElementById('menuItemId').value = item.id;
     document.getElementById('menuItemName').value = item.name;
     document.getElementById('menuItemPrice').value = item.price;
-    document.getElementById('menuItemCategory').innerHTML = getMenuCategoryOptionsHtml(normalizeMenuCategory(item.category));
+    populateMenuCategorySelect(normalizeMenuCategory(item.category));
     document.getElementById('menuDeleteBtn').style.display = 'flex';
     document.getElementById('menuItemError').textContent = '';
     document.getElementById('menuItemSheetTitle').textContent = t('تعديل صنف', 'Edit Item');
@@ -4339,7 +4276,7 @@ async function submitMenuItem() {
         console.error('Error in submitMenuItem:', e);
         let errorMsg = e.message || 'Unknown error';
         if (errorMsg.includes('check constraint') || errorMsg.includes('menu_items_category_check')) {
-            errorMsg = 'مشكلة في قاعدة البيانات: عمود التصنيف لسه فيه قيد قديم بيقبل 4 قيم بس. شغّل ملف SQL الخاص بالتصنيفات (menu_categories) على Supabase عشان يشيل القيد القديم، ثم جرّب مرة أخرى.';
+            errorMsg = 'مشكلة في قاعدة البيانات: عمود التصنيف عليه قيد قديم بيقبل 4 تصنيفات بس. شغّل ملف SQL الخاص بالتصنيفات الديناميكية على Supabase ثم جرّب مرة أخرى.';
         }
         errEl.textContent = t('حصل خطأ: ' + errorMsg, 'Error: ' + errorMsg);
         showToast(t('فشل حفظ الصنف: ' + errorMsg, 'Failed to save item: ' + errorMsg), 'error');
@@ -4375,7 +4312,7 @@ async function deleteMenuItem() {
 // ============================================================
 // PDF MENU IMPORT
 // ============================================================
-let pdfImportParsedData = null; // [{ name: string|null, category: <existing category key>|'__new__', newCategoryName: string|null, items: [{tempId,name,price,include}] }]
+let pdfImportParsedData = null; // [{ name: string|null, category: string, isNewCategory: bool, newCategoryName: string, items: [{tempId,name,price,include}] }]
 
 function openPdfImportSheet() {
     document.getElementById('pdfImportFileInput').value = '';
@@ -4430,43 +4367,31 @@ function extractPriceFromPdfLine(text) {
     return { name, price };
 }
 
-// Best-effort mapping of a detected header/category text to one of the business's ACTUAL
-// categories (loaded from menu_categories). Falls back to fuzzy keyword hints for the
-// classic drinks/food groupings, and if nothing matches, proposes the header text itself
-// as a brand-new category — left for the user to confirm (or reject) in the review step.
+// Best-effort mapping of a detected header/category text to one of the business's
+// existing categories. Returns null when nothing matches confidently, so the caller
+// can suggest creating a brand-new category instead of dumping it under "Other".
 function guessMenuCategoryFromText(text) {
-    const v = String(text || '').trim();
-    const lower = v.toLowerCase();
-    if (!lower) return { category: menuCategories[0] ? menuCategories[0].key : 'other', newCategoryName: null };
+    const v = String(text || '').trim().toLowerCase();
+    if (!v) return null;
 
-    // 1) exact/substring match against the business's own category names
+    // 1) direct match against an existing (default or custom) category's own name
     const directMatch = menuCategories.find(c => {
-        const name = (c.name || '').trim().toLowerCase();
-        return name && (lower.includes(name) || name.includes(lower));
+        const labelAr = String(c.label_ar || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+        const labelEn = String(c.label_en || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+        return (labelAr && (v.includes(labelAr) || labelAr.includes(v))) ||
+               (labelEn && (v.includes(labelEn) || labelEn.includes(v)));
     });
-    if (directMatch) return { category: directMatch.key, newCategoryName: null };
+    if (directMatch) return directMatch.key;
 
-    // 2) fuzzy keyword hints mapped to whichever category the business calls its
-    // cold/hot drinks & food, if those legacy keys exist
+    // 2) keyword heuristics for the common built-in categories, only if they still exist
     const coldKeywords = ['مشروبات باردة', 'عصير', 'عصائر', 'مياه غازية', 'كولا', 'باردة', 'cold', 'juice', 'soda', 'soft drink'];
     const hotKeywords = ['مشروبات ساخنة', 'قهوة', 'شاي', 'نسكافيه', 'كابتشينو', 'اسبريسو', 'ساخنة', 'hot', 'coffee', 'tea', 'cappuccino', 'espresso'];
     const foodKeywords = ['أكل', 'اكل', 'طعام', 'ساندوتش', 'ساندويتش', 'برجر', 'بيتزا', 'وجبات', 'مقبلات', 'food', 'burger', 'pizza', 'sandwich', 'meal', 'snack'];
-    const keywordKey = coldKeywords.some(k => lower.includes(k)) ? 'cold_drinks'
-        : hotKeywords.some(k => lower.includes(k)) ? 'hot_drinks'
-        : foodKeywords.some(k => lower.includes(k)) ? 'food'
-        : null;
-    if (keywordKey && menuCategories.some(c => c.key === keywordKey)) {
-        return { category: keywordKey, newCategoryName: null };
-    }
+    if (coldKeywords.some(k => v.includes(k)) && menuCategories.some(c => c.key === 'cold_drinks')) return 'cold_drinks';
+    if (hotKeywords.some(k => v.includes(k)) && menuCategories.some(c => c.key === 'hot_drinks')) return 'hot_drinks';
+    if (foodKeywords.some(k => v.includes(k)) && menuCategories.some(c => c.key === 'food')) return 'food';
 
-    // 3) no match at all — if the header looks like a real category name, propose creating it
-    const looksLikeHeader = v.length >= 2 && v.length <= 40 && v.split(/\s+/).length <= 5;
-    if (looksLikeHeader) {
-        return { category: '__new__', newCategoryName: v };
-    }
-
-    const fallback = menuCategories.find(c => c.key === 'other') || menuCategories[0];
-    return { category: fallback ? fallback.key : 'other', newCategoryName: null };
+    return null;
 }
 
 // Heuristic parser: lines ending in a price become items; short lines in a noticeably bigger
@@ -4513,8 +4438,17 @@ function parseMenuLinesIntoGroups(lines) {
         else merged.push(g);
     });
     return merged.map(g => {
-        const guess = guessMenuCategoryFromText(g.name);
-        return { ...g, category: guess.category, newCategoryName: guess.newCategoryName };
+        const guessed = guessMenuCategoryFromText(g.name);
+        if (guessed) return { ...g, category: guessed, isNewCategory: false };
+        // مفيش تصنيف حالي يطابق العنوان ده — لو فيه عنوان أصلاً، نقترح عمل تصنيف جديد بيه
+        // وننتظر تأكيد المستخدم في شاشة المراجعة. الأصناف من غير عنوان بتترتب على أول تصنيف موجود.
+        const fallback = menuCategories.find(c => c.key === 'other') || menuCategories[0];
+        return {
+            ...g,
+            category: fallback ? fallback.key : null,
+            isNewCategory: !!g.name,
+            newCategoryName: g.name || ''
+        };
     });
 }
 
@@ -4540,7 +4474,7 @@ async function analyzePdfMenu() {
 
     try {
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js';
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/legacy/build/pdf.worker.min.js';
         }
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -4584,25 +4518,37 @@ function renderPdfImportReview() {
     }
 
     const totalItems = pdfImportParsedData.reduce((sum, g) => sum + g.items.length, 0);
-    const newCatCount = pdfImportParsedData.filter(g => g.category === '__new__').length;
+    const newCatCount = pdfImportParsedData.filter(g => g.isNewCategory).length;
     let html = `<div style="font-size:13px;font-weight:700;color:var(--amber);margin-bottom:10px;">${t(`✅ تم العثور على ${totalItems} صنف`, `✅ Found ${totalItems} items`)}</div>`;
     if (newCatCount > 0) {
-        html += `<div style="font-size:12px;color:var(--text-dim);margin-bottom:10px;">${t(`✨ فيه ${newCatCount} تصنيف جديد مقترح — راجعه وعدّل الاسم لو حبيت، ومش هيتضاف إلا لما تدوس "إضافة المحدد للمنيو".`, `✨ ${newCatCount} new category is suggested — review/edit the name; it won't be created until you tap "Add Selected to Menu".`)}</div>`;
+        html += `<div style="font-size:12px;color:var(--text-dim);margin-bottom:10px;line-height:1.6;">${t('🆕 لقينا عناوين مش متطابقة مع أي تصنيف حالي — النظام اقترح تصنيفات جديدة لها تحت. راجعها وأكّد عليها لو عايز تتضاف، أو اختار تصنيف موجود بدلها.', '🆕 We found headers that don\'t match any existing category — new categories are suggested below. Review and confirm them if you want them added, or pick an existing category instead.')}</div>`;
     }
 
+    const categoryOptions = menuCategories.map(c => ({ value: c.key, label: t(c.label_ar, c.label_en) }));
+
     pdfImportParsedData.forEach((group, gIdx) => {
-        const isNew = group.category === '__new__';
+        const selectedValue = group.isNewCategory ? '__new__' : group.category;
+        let optionsHtml = categoryOptions.map(opt => `<option value="${escapeHtml(opt.value)}" ${selectedValue === opt.value ? 'selected' : ''}>${escapeHtml(opt.label)}</option>`).join('');
+        if (group.isNewCategory) {
+            optionsHtml += `<option value="__new__" selected>${escapeHtml(t(`🆕 تصنيف جديد: ${group.newCategoryName}`, `🆕 New category: ${group.newCategoryName}`))}</option>`;
+        }
+
         html += `<div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px;margin-bottom:10px;">`;
         html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
                     <i class="fa-solid fa-tags" style="color:var(--amber);flex-shrink:0;"></i>
                     <span style="font-size:12.5px;color:var(--text-dim);flex-shrink:0;">${group.name ? escapeHtml(group.name) : t('بدون عنوان', 'No header')}</span>
-                    <select id="pdfGroupCat_${gIdx}" onchange="togglePdfNewCategoryInput(${gIdx})" style="flex:1;min-width:130px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
-                        ${getMenuCategoryOptionsHtml(group.category, t('إنشاء تصنيف جديد', 'Create new category'))}
+                    <select id="pdfGroupCat_${gIdx}" onchange="onPdfGroupCategoryChange(${gIdx})" style="flex:1;min-width:130px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
+                        ${optionsHtml}
                     </select>
                 </div>`;
-        html += `<div id="pdfGroupNewCatWrap_${gIdx}" style="display:${isNew ? 'flex' : 'none'};align-items:center;gap:8px;margin-bottom:8px;">
-                    <span style="font-size:12px;color:var(--text-dim);flex-shrink:0;">${t('اسم التصنيف الجديد:', 'New category name:')}</span>
-                    <input type="text" id="pdfGroupNewCatName_${gIdx}" value="${escapeHtml(group.newCategoryName || group.name || '')}" style="flex:1;min-width:120px;padding:7px 8px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:var(--font-display);font-size:13px;">
+
+        html += `<div id="pdfGroupNewCatBox_${gIdx}" style="display:${selectedValue === '__new__' ? 'flex' : 'none'};align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg);border:1px dashed var(--amber);border-radius:var(--radius-sm);padding:8px;margin-bottom:8px;">
+                    <i class="fa-solid fa-circle-plus" style="color:var(--amber);flex-shrink:0;"></i>
+                    <input type="text" id="pdfGroupNewCatName_${gIdx}" value="${escapeHtml(group.newCategoryName || group.name || '')}" placeholder="${t('اسم التصنيف الجديد', 'New category name')}" style="flex:1;min-width:110px;padding:6px 8px;background:var(--bg-sunken);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);white-space:nowrap;">
+                        <input type="checkbox" id="pdfGroupNewCatConfirm_${gIdx}" style="width:auto;">
+                        ${t('تأكيد إنشاء التصنيف', 'Confirm create category')}
+                    </label>
                 </div>`;
 
         group.items.forEach(item => {
@@ -4619,11 +4565,11 @@ function renderPdfImportReview() {
     container.innerHTML = html;
 }
 
-function togglePdfNewCategoryInput(gIdx) {
+function onPdfGroupCategoryChange(gIdx) {
     const select = document.getElementById(`pdfGroupCat_${gIdx}`);
-    const wrap = document.getElementById(`pdfGroupNewCatWrap_${gIdx}`);
-    if (!select || !wrap) return;
-    wrap.style.display = select.value === '__new__' ? 'flex' : 'none';
+    const box = document.getElementById(`pdfGroupNewCatBox_${gIdx}`);
+    if (!select || !box) return;
+    box.style.display = select.value === '__new__' ? 'flex' : 'none';
 }
 
 async function confirmPdfImport() {
@@ -4640,9 +4586,7 @@ async function confirmPdfImport() {
         let addedCount = 0;
         let hadError = false;
         let createdCategoriesCount = 0;
-        // Cache newly-created categories within this run, keyed by the typed name, so two
-        // groups proposing the same new category name only create it once.
-        const newCategoryCache = {};
+        let skippedUnconfirmedNewCat = false;
 
         for (let gIdx = 0; gIdx < pdfImportParsedData.length; gIdx++) {
             const group = pdfImportParsedData[gIdx];
@@ -4652,24 +4596,24 @@ async function confirmPdfImport() {
             const catSelect = document.getElementById(`pdfGroupCat_${gIdx}`);
             let category;
             if (catSelect.value === '__new__') {
+                // المستخدم لازم يأكد إنشاء التصنيف الجديد صراحة قبل ما نضيفه
                 const nameInput = document.getElementById(`pdfGroupNewCatName_${gIdx}`);
-                const newName = (nameInput ? nameInput.value : '').trim();
-                if (!newName) { hadError = true; continue; }
-                const cacheKey = newName.toLowerCase();
-                if (newCategoryCache[cacheKey]) {
-                    category = newCategoryCache[cacheKey];
-                } else {
+                const confirmBox = document.getElementById(`pdfGroupNewCatConfirm_${gIdx}`);
+                const newName = nameInput ? nameInput.value.trim() : '';
+                if (confirmBox && confirmBox.checked && newName) {
                     try {
-                        const createdCat = await createMenuCategory(newName, '📦');
-                        if (!createdCat) { hadError = true; continue; }
-                        category = createdCat.key;
-                        newCategoryCache[cacheKey] = category;
+                        const created = await addMenuCategory(newName, newName);
+                        category = created.key;
                         createdCategoriesCount++;
                     } catch (e) {
-                        console.error('PDF import — creating new category failed:', e);
+                        console.error('Failed creating category from PDF import:', e);
+                        category = (menuCategories.find(c => c.key === 'other') || menuCategories[0]).key;
                         hadError = true;
-                        continue;
                     }
+                } else {
+                    // لسه ما اتأكدش إنشاء التصنيف -> نحط الأصناف دي تحت أول تصنيف موجود بدل ما نوقف الاستيراد كله
+                    skippedUnconfirmedNewCat = true;
+                    category = (menuCategories.find(c => c.key === 'other') || menuCategories[0]).key;
                 }
             } else {
                 category = normalizeMenuCategory(catSelect.value);
@@ -4702,7 +4646,6 @@ async function confirmPdfImport() {
             }
         }
 
-        renderSettingsMenuCategories();
         renderSettings();
         renderMenuQuickAdd();
         if (typeof renderStationOrdersSection === 'function') renderStationOrdersSection();
@@ -4711,13 +4654,18 @@ async function confirmPdfImport() {
         pdfImportParsedData = null;
 
         if (addedCount > 0) {
-            const catNote = createdCategoriesCount > 0
-                ? t(` (وتصنيف جديد: ${createdCategoriesCount})`, ` (+${createdCategoriesCount} new categor${createdCategoriesCount === 1 ? 'y' : 'ies'})`)
-                : '';
-            showToast((hadError
-                ? t('⚠️ حصل خطأ أثناء إضافة بعض الأصناف', '⚠️ Something went wrong adding some items')
-                : t('✅ تم إضافة الأصناف للمنيو بنجاح', '✅ Items added to the menu successfully')) + catNote,
-                hadError ? 'error' : 'success');
+            let msg;
+            if (hadError) {
+                msg = t('⚠️ حصل خطأ أثناء إضافة بعض الأصناف', '⚠️ Something went wrong adding some items');
+            } else if (createdCategoriesCount > 0) {
+                msg = t(`✅ تم إضافة الأصناف و${createdCategoriesCount} تصنيف جديد بنجاح`, `✅ Items and ${createdCategoriesCount} new categor${createdCategoriesCount === 1 ? 'y' : 'ies'} added successfully`);
+            } else {
+                msg = t('✅ تم إضافة الأصناف للمنيو بنجاح', '✅ Items added to the menu successfully');
+            }
+            showToast(msg, hadError ? 'error' : 'success');
+            if (skippedUnconfirmedNewCat) {
+                showToast(t('ℹ️ بعض الأصناف اتحطت مؤقتاً في تصنيف موجود لأن التصنيف الجديد المقترح ما اتأكدش', 'ℹ️ Some items were placed under an existing category because a suggested new category wasn\'t confirmed'), 'warning');
+            }
         } else {
             errEl.textContent = t('⚠️ حصل خطأ أثناء إضافة الأصناف', '⚠️ Something went wrong adding the items');
         }
