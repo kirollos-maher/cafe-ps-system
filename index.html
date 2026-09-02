@@ -8,7 +8,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/legacy/build/pdf.min.js"></script>
 <link rel="stylesheet" href="style.css">
 <script src="app.js" defer></script>
 <script src="alerts.js" defer></script>
@@ -342,10 +341,7 @@
         <!-- ✅ قائمة الأكل والمشروبات -->
         <div class="section-title" data-ar="قائمة الأكل والمشروبات" data-en="Food & Drinks Menu">قائمة الأكل والمشروبات</div>
         <div class="panel" id="settingsMenu"></div>
-        <div style="display:flex;gap:8px;margin-top:8px;">
-            <button class="btn btn-ghost btn-block" style="flex:1;" onclick="openMenuItemSheet()"><i class="fa-solid fa-plus"></i> <span data-ar="إضافة صنف" data-en="Add Item">إضافة صنف</span></button>
-            <button class="btn btn-ghost btn-block" style="flex:1;" onclick="openPdfImportSheet()"><i class="fa-solid fa-file-pdf"></i> <span data-ar="استيراد من PDF" data-en="Import from PDF">استيراد من PDF</span></button>
-        </div>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openMenuItemSheet()"><i class="fa-solid fa-plus"></i> <span data-ar="إضافة صنف" data-en="Add Item">إضافة صنف</span></button>
 
         <!-- ✅ الموظفين -->
         <div class="section-title" data-ar="الموظفين" data-en="Employees">الموظفين</div>
@@ -540,41 +536,6 @@
             </div>
             <button class="btn btn-amber btn-block" onclick="submitCategory()"><span data-ar="حفظ" data-en="Save">حفظ</span></button>
             <div class="error-text" id="categoryError"></div>
-        </div>
-    </div>
-
-    <!-- ============== PDF MENU IMPORT SHEET ============== -->
-    <div class="overlay" id="pdfImportOverlay">
-        <div class="sheet" style="max-width:560px;">
-            <div class="sheet-handle"></div>
-            <div class="sheet-title"><span data-ar="استيراد المنيو من PDF" data-en="Import Menu from PDF">استيراد المنيو من PDF</span><button class="close-x" onclick="closeSheet('pdfImportOverlay')"><i class="fa-solid fa-xmark"></i></button></div>
-
-            <!-- Step 1: upload -->
-            <div id="pdfImportUploadStep">
-                <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:14px;line-height:1.6;" data-ar="ارفع ملف PDF فيه قائمة الأكل والمشروبات، والنظام هيحاول يقرأ الأصناف والتصنيفات تلقائياً. هتقدر تراجع وتعدل قبل الإضافة النهائية." data-en="Upload a PDF with your food & drinks menu, and the system will try to read the items and categories automatically. You can review and edit before the final import.">
-                    ارفع ملف PDF فيه قائمة الأكل والمشروبات، والنظام هيحاول يقرأ الأصناف والتصنيفات تلقائياً. هتقدر تراجع وتعدل قبل الإضافة النهائية.
-                </div>
-                <div class="field">
-                    <label data-ar="ملف المنيو (PDF)" data-en="Menu File (PDF)">ملف المنيو (PDF)</label>
-                    <input type="file" id="pdfImportFileInput" accept="application/pdf" style="padding:8px;">
-                </div>
-                <button class="btn btn-amber btn-block" id="pdfImportAnalyzeBtn" onclick="analyzePdfMenu()"><i class="fa-solid fa-magnifying-glass"></i> <span data-ar="تحليل الملف" data-en="Analyze File">تحليل الملف</span></button>
-                <div id="pdfImportStatus" style="font-size:12.5px;color:var(--text-dim);margin-top:10px;text-align:center;"></div>
-                <div class="error-text" id="pdfImportError"></div>
-            </div>
-
-            <!-- Step 2: review & confirm -->
-            <div id="pdfImportReviewStep" style="display:none;">
-                <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:14px;line-height:1.6;" data-ar="راجع الأصناف اللي اتقرأت من الملف. الغي أي صنف مش مضبوط، عدّل الاسم/السعر، أو غيّر التصنيف. لو النظام اقترح تصنيف جديد، لازم تأكّده قبل ما يتضاف. الأصناف المحددة بس هي اللي هتتضاف." data-en="Review the items detected from the file. Uncheck anything wrong, edit the name/price, or change the category. If the system suggests a new category, you must confirm it before it's added. Only checked items will be added.">
-                    راجع الأصناف اللي اتقرأت من الملف. الغي أي صنف مش مضبوط، عدّل الاسم/السعر، أو غيّر التصنيف. لو النظام اقترح تصنيف جديد، لازم تأكّده قبل ما يتضاف. الأصناف المحددة بس هي اللي هتتضاف.
-                </div>
-                <div id="pdfImportPreviewList"></div>
-                <div style="display:flex;gap:8px;margin-top:14px;">
-                    <button class="btn btn-ghost" style="flex:1;" onclick="cancelPdfImportReview()"><span data-ar="إلغاء" data-en="Cancel">إلغاء</span></button>
-                    <button class="btn btn-amber" style="flex:2;" id="pdfImportConfirmBtn" onclick="confirmPdfImport()"><i class="fa-solid fa-check"></i> <span data-ar="إضافة المحدد للمنيو" data-en="Add Selected to Menu">إضافة المحدد للمنيو</span></button>
-                </div>
-                <div class="error-text" id="pdfImportReviewError"></div>
-            </div>
         </div>
     </div>
 
